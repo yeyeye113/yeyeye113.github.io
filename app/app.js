@@ -35,6 +35,9 @@ import {
   buildRadarPoints,
   sanitizeLlmConfig,
   entitlementText,
+  exportBackup,
+  validateBackup,
+  importBackup,
 } from '/src/ui-core/index.mjs';
 
 // 趋势折线 SVG 拼接（坐标数学在 ui-core.buildTrendPoints，这里只出字符串）。
@@ -998,6 +1001,109 @@ function initCoach() {
   $('#coach-link-row').addEventListener('click', openCoachReco);
 }
 
+// ---------------- 数据备份：导出 / 导入（V2.0，逻辑真源 ui-core 契约 §13） ----------------
+// 本地优先产品的逃生舱：清浏览器数据/换设备前导出 JSON，回来时导入。
+// 文件读取用 File.text()（Blob API），零网络请求——隐私机检 fetch 白名单不涉及。
+
+let pendingImportData = null; // 已通过 validateBackup 的备份 data，等用户选合并/覆盖
+
+function doExportBackup() {
+  const { payload, filename } = exportBackup(store);
+  const blob = new Blob([payload], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast(`已导出 ${filename}——收好，这是你数据的唯一副本`);
+}
+
+// replace 模式的清面回调（注入给 ui-core.importBackup）：只删 storage 四面键，
+// 不碰 guomian:onboarded 等 UI 偏好键。键名同 src/storage 的 KEYS（契约 §9 四面），
+// storage 改键名须同步这里。
+function wipeStoreFaces() {
+  for (const face of ['profiles', 'sessions', 'entitlements', 'ledger']) {
+    localStorage.removeItem(`guomian:${face}`);
+  }
+}
+
+function resetReplaceButton() {
+  const btn = $('#btn-import-replace');
+  btn.dataset.armed = '';
+  btn.textContent = '覆盖导入（清空现有数据）';
+}
+
+function openImportOverlay(data, counts) {
+  pendingImportData = data;
+  $('#import-summary').textContent =
+    `将导入 ${counts.sessions} 场面试记录、${counts.profiles} 份档案、${counts.ledger} 条台账。`
+    + '合并会保留现有记录（同一场不重复）；覆盖会先清空本机现有数据。';
+  resetReplaceButton();
+  $('#import-overlay').hidden = false;
+  $('#btn-import-merge').focus();
+}
+
+function closeImportOverlay() {
+  const overlay = $('#import-overlay');
+  if (overlay.hidden) return;
+  overlay.hidden = true;
+  pendingImportData = null;
+  $('#btn-backup-import').focus(); // 焦点归还触发按钮
+}
+
+function runImport(mode) {
+  if (!pendingImportData) return;
+  const { imported } = importBackup(store, pendingImportData, { mode, wipe: wipeStoreFaces });
+  closeImportOverlay();
+  renderLedger(); // 台账视图立即反映导入结果
+  toast(`导入完成：${imported.sessions} 场记录、${imported.profiles} 份档案、${imported.ledger} 条台账`
+    + (imported.entitlements ? '，权益已更新' : ''));
+}
+
+function initBackup() {
+  $('#btn-backup-export').addEventListener('click', doExportBackup);
+  $('#btn-backup-import').addEventListener('click', () => $('#backup-file').click());
+  $('#backup-file').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // 清掉选择，同一文件可再次触发 change
+    if (!file) return;
+    let text;
+    try {
+      text = await file.text();
+    } catch {
+      toast('文件读取失败，请重新选择');
+      return;
+    }
+    const result = validateBackup(text);
+    if (!result.ok) {
+      toast(`无法导入：${result.reason}`);
+      return;
+    }
+    openImportOverlay(result.data, result.counts);
+  });
+  $('#btn-import-merge').addEventListener('click', () => runImport('merge'));
+  // 覆盖是不可逆危险操作：两段式确认——首击只是「上膛」改文案，再击才执行
+  $('#btn-import-replace').addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    if (btn.dataset.armed === '1') {
+      runImport('replace');
+      return;
+    }
+    btn.dataset.armed = '1';
+    btn.textContent = '再点一次确认：现有数据将被清空';
+  });
+  $('#btn-import-cancel').addEventListener('click', closeImportOverlay);
+  $('#import-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeImportOverlay(); // 只点背景关，点卡片不关
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeImportOverlay();
+  });
+}
+
 // ---------------- PWA 安装引导（V1.9，判端事实见 docs/上架路线预研.md §1） ----------------
 // 三分支：已装（standalone）不出卡；iOS 无 beforeinstallprompt 只能图文引导手动
 // 「添加到主屏幕」；Chromium 系捕获 beforeinstallprompt 后由按钮触发原生安装弹窗；
@@ -1188,6 +1294,7 @@ function init() {
   initBetaBadge();
   initCoach();
   initInstallCard();
+  initBackup();
   $('#disclosure-bar').textContent = `${DISCLOSURE}。`;
   showView('prepare');
   initOnboarding(); // 放在 showView 之后：首访聚焦引导按钮不被视图切换打断

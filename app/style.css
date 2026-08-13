@@ -246,9 +246,30 @@ textarea:focus-visible, input:focus-visible {
   color: var(--text-dim);
 }
 
+/* 危险操作按钮（覆盖导入等不可逆动作）：红描边红字，上膛态（data-armed）填充加重 */
+.btn.danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn.danger:not(:disabled):active { background: rgba(208, 106, 90, 0.14); }
+
+.btn.danger[data-armed='1'] {
+  background: rgba(208, 106, 90, 0.18);
+  font-weight: 600;
+}
+
 .btn.small { min-height: 48px; font-size: 14px; }
 
 .btn.block { display: block; width: 100%; margin-top: 14px; }
+
+/* 数据备份卡：导出/导入并排两钮，窄屏各占一半 */
+.backup-row { display: flex; gap: 10px; margin-top: 10px; }
+
+.backup-row .btn { flex: 1; }
+
+.import-summary { font-size: 14px; color: var(--text); line-height: 1.6; margin: 10px 0 4px; }
 
 .hint { font-size: 13px; color: var(--text-dim); margin: 8px 0; }
 

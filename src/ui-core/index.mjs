@@ -212,6 +212,144 @@ export function sanitizeLlmConfig({ baseURL, apiKey, model, timeoutMs } = {}) {
   return config;
 }
 
+// ---- V2.0 本地数据备份（契约 §13）：本地优先产品的逃生舱 ----
+// 三函数全部只经 store 公开四面 API（契约 §9）读写，不碰 backend、不开 storage 后门。
+// 已知公开 API 语义带来的两处口径（对拍/去重按此设计，交付与测试同口径）：
+//   ① saveProfile 会重新发号（id/createdAt 刷新）——merge 判重按「id 或 jdText+resumeText
+//     内容相同」双条件，防重新发号后同备份二次导入翻倍；
+//   ② saveSession 会把 savedAt 刷成导入时刻（原 id 保留）——历史排序回退 endedAt 仍成立。
+
+const BACKUP_APP = 'guomian';
+const BACKUP_SCHEMA = 1;
+
+// exportBackup(store) -> { payload, filename }
+// 四面聚合成带信封的 JSON 字符串 { app, schema, exportedAt(epoch ms), data:{四面} }；
+// filename 形如「过面备份-20260813.json」（本地日期，与台账日期同源 localDateStr）。
+export function exportBackup(store) {
+  const now = Date.now();
+  const envelope = {
+    app: BACKUP_APP,
+    schema: BACKUP_SCHEMA,
+    exportedAt: now,
+    data: {
+      profiles: store.listProfiles(),
+      sessions: store.listSessions(),
+      entitlements: store.getEntitlements(),
+      ledger: store.getLedger(),
+    },
+  };
+  return {
+    payload: JSON.stringify(envelope, null, 2),
+    filename: `过面备份-${localDateStr(now).replaceAll('-', '')}.json`,
+  };
+}
+
+// validateBackup(text) -> { ok:true, data, counts } | { ok:false, reason }
+// 解析＋信封校验（app 标识 / schema 版本 / 四面形状逐面）；一切失败路径给中文 reason 不抛。
+export function validateBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text));
+  } catch {
+    return { ok: false, reason: '文件内容不是有效的 JSON，可能已损坏或选错了文件' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: '备份格式不对：顶层应为信封对象' };
+  }
+  if (parsed.app !== BACKUP_APP) {
+    return { ok: false, reason: '这不是「过面」导出的备份文件' };
+  }
+  if (!Number.isFinite(parsed.schema) || parsed.schema < 1) {
+    return { ok: false, reason: '备份缺少有效的版本号（schema）' };
+  }
+  if (parsed.schema > BACKUP_SCHEMA) {
+    return { ok: false, reason: `备份来自更新版本的应用（schema ${parsed.schema}），请先升级应用再导入` };
+  }
+  const d = parsed.data;
+  if (!d || typeof d !== 'object' || Array.isArray(d)) {
+    return { ok: false, reason: '备份缺少数据体（data）' };
+  }
+  for (const face of ['profiles', 'sessions', 'ledger']) {
+    if (!Array.isArray(d[face])) return { ok: false, reason: `备份数据不完整：${face} 应为数组` };
+  }
+  if (!d.entitlements || typeof d.entitlements !== 'object' || Array.isArray(d.entitlements)) {
+    return { ok: false, reason: '备份数据不完整：entitlements 应为对象' };
+  }
+  return {
+    ok: true,
+    data: d,
+    counts: { profiles: d.profiles.length, sessions: d.sessions.length, ledger: d.ledger.length },
+  };
+}
+
+// 会员到期取较晚的一侧；两侧都不是可解析日期时回 null
+function laterMemberUntil(a, b) {
+  const ta = typeof a === 'string' ? Date.parse(a) : NaN;
+  const tb = typeof b === 'string' ? Date.parse(b) : NaN;
+  if (!Number.isFinite(ta)) return Number.isFinite(tb) ? b : null;
+  if (!Number.isFinite(tb)) return a;
+  return tb > ta ? b : a;
+}
+
+// importBackup(store, data, { mode:'merge'|'replace', wipe? }) -> { imported: counts }
+// merge：按 id 去重并入（profiles 加内容判重，见头注①）；ledger 按整条内容判重
+//   （条目无 id，重复并入会画歪趋势线）。
+// replace：先清四面再全量写入。store 公开面没有删除 API（刻意的——业务代码不该能删档），
+//   「清面」由调用方注入 wipe 回调完成（app.js 删 localStorage 四面键 / 测试清内存 backend），
+//   ui-core 保持零 IO。
+// 权益 merge 的对抗性思考：credits 取两者较大值、memberUntil 取较晚——不取相加，
+// 反复导入同一备份幂等、不会滚雪球刷券。但说清定位：本地产品的权益本就存在用户
+// 自己的 localStorage 里（直接改数据也能改权益），max 语义是两份数据的一致性合并
+// 选择，不是安全边界；真安全边界要等 V2 权益上服务端。
+// MAX_SESSIONS 修剪语义经 saveSession 自然生效（超 30 场挤掉最旧）。
+export function importBackup(store, data, { mode = 'merge', wipe } = {}) {
+  const merge = mode !== 'replace';
+  if (!merge && typeof wipe === 'function') wipe();
+  const imported = { profiles: 0, sessions: 0, ledger: 0, entitlements: false };
+
+  const existingProfiles = merge ? store.listProfiles() : [];
+  const profileSeen = (p) => existingProfiles.some((e) => e
+    && (e.id === p.id || (e.jdText === p.jdText && e.resumeText === p.resumeText)));
+  for (const p of data?.profiles ?? []) {
+    if (!p || typeof p !== 'object') continue;
+    if (merge && profileSeen(p)) continue;
+    if (store.saveProfile({ jdText: p.jdText, resumeText: p.resumeText, jd: p.jd, resume: p.resume })) {
+      imported.profiles += 1;
+    }
+  }
+
+  const existingSessionIds = merge ? new Set(store.listSessions().map((s) => s?.id)) : new Set();
+  for (const s of data?.sessions ?? []) {
+    if (!s || typeof s !== 'object') continue;
+    if (merge && s.id != null && existingSessionIds.has(s.id)) continue;
+    if (store.saveSession(s)) imported.sessions += 1;
+  }
+
+  const existingLedger = merge ? new Set(store.getLedger().map((e) => JSON.stringify(e))) : new Set();
+  for (const entry of data?.ledger ?? []) {
+    if (merge && existingLedger.has(JSON.stringify(entry))) continue;
+    if (store.appendLedger(entry)) imported.ledger += 1;
+  }
+
+  const incoming = data?.entitlements ?? {};
+  if (merge) {
+    const cur = store.getEntitlements();
+    imported.entitlements = store.setEntitlements({
+      ...cur,
+      ...incoming,
+      credits: Math.max(
+        Number.isFinite(cur.credits) ? cur.credits : 0,
+        Number.isFinite(incoming.credits) ? incoming.credits : 0,
+      ),
+      memberUntil: laterMemberUntil(cur.memberUntil, incoming.memberUntil),
+    }) === true;
+  } else {
+    imported.entitlements = store.setEntitlements(incoming) === true;
+  }
+
+  return { imported };
+}
+
 // entitlementText(ent) -> string：权益状态一行文案（台账页与解锁卡共用）；空输入回默认
 export function entitlementText(ent) {
   const credits = ent?.credits ?? 0;
