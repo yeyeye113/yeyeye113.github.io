@@ -3,6 +3,10 @@
 // 免费可见：①＋③第一题＋披露段；披露段永不 locked、永在最后。
 // 模板按「分数带 × 维度/题型」确定性选取（哈希驱动，零随机），避免千篇一律。
 // 诚实边界（docs/计划书.md §3）：披露句为硬条款；全部模板不得含保 offer 类承诺词。
+// V1.8：⑦ 节尾接「延伸锦囊」——按本场雷达最弱 1-2 维调 coach 的 recommendTips 引 3-5 条。
+// 单真源纪律：报告只渲染 title＋一句摘要＋id 锚点，body 全文由前端锦囊页承载，此处绝不复制。
+
+import { recommendTips } from '../coach/index.mjs';
 
 const DISCLOSURE = 'AI 模拟评分仅供练习参考，不预测真实面试结果';
 
@@ -391,6 +395,16 @@ function quoteOf(text, max = 100) {
   return t.length <= max ? t : `${t.slice(0, max)}……`;
 }
 
+// 锦囊摘要：取 body 首句并硬顶 60 字——保证渲染文本永远短于 body 全文（body 契约 100-300 字），
+// 机检「不复制全文」依赖这个上限。
+function tipSummary(body) {
+  const t = String(body ?? '').trim();
+  const m = t.match(/^[^。！？]*[。！？]?/);
+  let s = m ? m[0] : t;
+  if (s.length > 60) s = `${s.slice(0, 60)}……`;
+  return s;
+}
+
 function dimLine(radar, d) {
   const score = radar[d] ?? 0;
   return `- ${DIM_LABELS[d]}：${score} 分（${band(score)}档）。${pick(DIM_COMMENT[d][band(score)], `radar:${d}:${score}`)}`;
@@ -565,11 +579,32 @@ export function buildReport({ result, jd, resume, match }) {
     locked: true,
   });
 
-  // ⑦ 7 天冲刺计划（locked）
+  // ⑦ 7 天冲刺计划（locked）＋节尾延伸锦囊（V1.8）
   const sprintLines = SPRINT.map((dayPool, i) => `- ${pick(dayPool, `sprint:${i}:${total}:${weakestLabels}`)}`);
+
+  // 延伸锦囊：取本场雷达最弱 1-2 维（次弱维 ≥85 分视为无真实弱点、只取 1 维）。
+  // recommendTips 为契约确定性设计（同输入同输出），直接消费。
+  // 渲染约定（前端联动契约，勿漂移）：每条一行
+  //   「▸ <title>（锦囊·<category>）——<body 首句摘要> #<tip-id>」
+  // 行尾 `#tip-` 前缀锚点是文本约定：前端锦囊页解析 #tip- 前缀即可跳转对应条目；
+  // Report 对外形状不变（不加新字段），body 全文单真源在 src/coach。
+  const radarOrdered = [...DIMS].sort(
+    (a, b) => (ss.radar?.[a] ?? 0) - (ss.radar?.[b] ?? 0) || DIMS.indexOf(a) - DIMS.indexOf(b),
+  );
+  const weakDimsForTips = radarOrdered.slice(0, (ss.radar?.[radarOrdered[1]] ?? 0) >= 85 ? 1 : 2);
+  const tips = recommendTips({ weakDims: weakDimsForTips });
+  const tipLines = (Array.isArray(tips) ? tips : []).map(
+    (t) => `▸ ${t.title}（锦囊·${t.category}）——${tipSummary(t.body)} #${t.id}`,
+  );
+
   sections.push({
     heading: '⑦ 7 天冲刺计划',
-    body: ['以本场结果为起点的 7 天行动清单，每天一件事、每件事可验收：', ...sprintLines].join('\n'),
+    body: [
+      '以本场结果为起点的 7 天行动清单，每天一件事、每件事可验收：',
+      ...sprintLines,
+      `延伸锦囊（按本场最弱维度「${weakDimsForTips.map((d) => DIM_LABELS[d]).join('、')}」推荐，完整实操正文见锦囊页）：`,
+      ...tipLines,
+    ].join('\n'),
     locked: true,
   });
 

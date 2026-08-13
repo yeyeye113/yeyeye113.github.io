@@ -16,6 +16,8 @@ import { createStore } from '/src/storage/index.mjs';
 import { SKUS, getEntitlements, canUnlock, unlockReport, grantSku, redeemCode, betaUnlock } from '/src/monetize/index.mjs';
 // 公测开关（契约 §10 V1.7）：单布尔单真源，正式售卖时只改 src/config 这一处
 import { BETA_FREE } from '/src/config/index.mjs';
+// 面试锦囊（契约 §14 V1.8）：纯数据方法库由并行子代理施工，按契约形状消费
+import { TIPS, listCategories, searchTips, getTipsByCategory, recommendTips } from '/src/coach/index.mjs';
 // 示例数据（V1.4 一键填示例）：机检在 test/samples.test.mjs
 import { SAMPLES } from '/src/samples/index.mjs';
 // 接缝层纯逻辑（契约 §13，V1.3 外移）：机检在 test/ui-core.test.mjs
@@ -101,6 +103,7 @@ const state = {
   currentReport: null,    // 报告页正在展示的 Report
   currentMeta: null,      // 导出用元信息 { date, mode, totalScore }（src/export 消费）
   currentClosing: null,   // 面试官收尾台词（报告页顶部寄语行，V1.6 P3-3）
+  currentWeakDims: null,  // 本场评分弱维度 key 数组（锦囊推荐联动，V1.8）
   currentSessionId: null, // 对应 storage 里的会话 id（解锁用）
   unlockedIds: new Set(), // 本次会话内已解锁的报告 id（storage 侧标记的兜底）
 };
@@ -127,6 +130,7 @@ function showView(name) {
   }
   if (name === 'ledger') renderLedger();
   if (name === 'report') renderReportView();
+  if (name === 'coach') renderCoach();
   if (name === 'interview') {
     $('#interview-empty').hidden = Boolean(state.session);
     $('#interview-main').hidden = !state.session;
@@ -401,6 +405,7 @@ function concludeInterview({ early = false } = {}) {
   state.currentReport = report;
   state.currentMeta = buildReportMeta({ result: { ...result, savedAt }, mode: state.plan.mode });
   state.currentClosing = state.persona.closingLine;
+  state.currentWeakDims = result.sessionScore?.weakest ?? null;
   state.currentSessionId = record?.id ?? null;
   state.session = null;
   state.plan = null;
@@ -556,6 +561,8 @@ function renderReportView() {
   const report = state.currentReport;
   const unlocked = reportUnlocked(state.currentSessionId);
   $('#export-locked-hint').hidden = unlocked; // 未解锁时提示导出的是占位版
+  // 弱项锦囊联动（V1.8）：本场有弱维度才出，点击切到锦囊页按弱项过滤
+  $('#coach-link-row').hidden = !(Array.isArray(state.currentWeakDims) && state.currentWeakDims.length > 0);
   const container = $('#report-content');
   container.innerHTML = '';
 
@@ -684,6 +691,7 @@ function openSavedReport(rec) {
   state.currentReport = rec.report;
   state.currentMeta = buildReportMeta({ result: rec, mode: rec?.mode });
   state.currentClosing = typeof rec.closingLine === 'string' ? rec.closingLine : null;
+  state.currentWeakDims = rec?.sessionScore?.weakest ?? null;
   state.currentSessionId = rec.id ?? null;
   showView('report');
 }
@@ -815,6 +823,135 @@ function initPrivacyOverlay() {
   });
 }
 
+// ---------------- ⑤ 锦囊页（契约 §14 V1.8） ----------------
+// 数据与过滤逻辑全在 src/coach（单真源），这里只做渲染与交互状态。
+// 过滤优先级：弱项推荐（报告页联动）> 搜索词 > 分类；搜索与分类互斥——
+// 输入关键词即离开分类视图，点分类即清搜索框，状态永远只有一个来源。
+
+const COACH_ALL = '全部';
+const coachState = {
+  category: COACH_ALL,
+  keyword: '',
+  recoTips: null, // 非 null = 报告页弱项推荐态（Tip 数组）
+};
+let coachSearchTimer = null;
+
+function coachVisibleTips() {
+  if (coachState.recoTips) return coachState.recoTips;
+  if (coachState.keyword) return searchTips(coachState.keyword); // 契约：空词回 []，故空词不走这支
+  if (coachState.category === COACH_ALL) return TIPS;
+  return getTipsByCategory(coachState.category);
+}
+
+// 条目卡片：title＋category 徽标＋body 常显；script/dont 用 details 默认折叠保持列表可扫。
+// 全部 textContent 渲染（注入纪律不因自家数据破例）。
+function buildTipCard(tip) {
+  const card = document.createElement('article');
+  card.className = 'coach-card';
+
+  const head = document.createElement('h3');
+  head.className = 'coach-card-title';
+  const titleSpan = document.createElement('span');
+  titleSpan.textContent = tip.title;
+  const catBadge = document.createElement('span');
+  catBadge.className = 'coach-cat-badge';
+  catBadge.textContent = tip.category;
+  head.append(titleSpan, catBadge);
+  card.append(head);
+
+  const body = document.createElement('p');
+  body.className = 'coach-body';
+  body.textContent = tip.body;
+  card.append(body);
+
+  if (tip.script) {
+    const details = document.createElement('details');
+    details.className = 'coach-script';
+    const summary = document.createElement('summary');
+    summary.textContent = '话术示范';
+    const quote = document.createElement('p');
+    quote.textContent = tip.script;
+    details.append(summary, quote);
+    card.append(details);
+  }
+
+  if (tip.dont) {
+    const details = document.createElement('details');
+    details.className = 'coach-dont';
+    const summary = document.createElement('summary');
+    summary.textContent = '别这样';
+    const warn = document.createElement('p');
+    warn.textContent = tip.dont;
+    details.append(summary, warn);
+    card.append(details);
+  }
+
+  return card;
+}
+
+function renderCoachCats() {
+  const wrap = $('#coach-cats');
+  wrap.innerHTML = '';
+  for (const cat of [COACH_ALL, ...listCategories()]) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'coach-cat-pill';
+    btn.textContent = cat;
+    btn.classList.toggle('active', !coachState.recoTips && !coachState.keyword && coachState.category === cat);
+    btn.addEventListener('click', () => {
+      coachState.category = cat;
+      coachState.keyword = '';
+      coachState.recoTips = null;
+      $('#coach-search').value = '';
+      renderCoach();
+    });
+    wrap.append(btn);
+  }
+}
+
+function renderCoach() {
+  $('#coach-reco-bar').hidden = !coachState.recoTips;
+  renderCoachCats();
+
+  const list = $('#coach-list');
+  list.innerHTML = '';
+  const tips = coachVisibleTips();
+  if (tips.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-inline';
+    empty.textContent = `没搜到与「${coachState.keyword}」相关的锦囊，换个词试试：追问、STAR、谈薪、反问。`;
+    list.append(empty);
+    return;
+  }
+  for (const tip of tips) list.append(buildTipCard(tip));
+}
+
+// 报告页「针对你的弱项」入口：切到锦囊页并按本场弱维度推荐过滤
+function openCoachReco() {
+  const tips = recommendTips({ weakDims: state.currentWeakDims ?? [] });
+  coachState.recoTips = tips.length > 0 ? tips : null; // 推荐空时退化为全部，不出空推荐态
+  coachState.keyword = '';
+  coachState.category = COACH_ALL;
+  $('#coach-search').value = '';
+  showView('coach');
+}
+
+function initCoach() {
+  $('#coach-search').addEventListener('input', (e) => {
+    clearTimeout(coachSearchTimer);
+    coachSearchTimer = setTimeout(() => {
+      coachState.keyword = e.target.value.trim(); // 空词回分类视图（契约 searchTips 空词返回 []）
+      coachState.recoTips = null;
+      renderCoach();
+    }, 200); // 防抖：即输即滤但不逐键全量过滤
+  });
+  $('#btn-coach-reco-clear').addEventListener('click', () => {
+    coachState.recoTips = null;
+    renderCoach();
+  });
+  $('#coach-link-row').addEventListener('click', openCoachReco);
+}
+
 // ---------------- 公测徽标与说明浮层（契约 §10 V1.7） ----------------
 // 徽标仅 BETA_FREE 时显示；浮层复用 modal 体系（焦点陷阱由 initModalFocusTrap 统一覆盖），
 // 关闭后焦点归还徽标按钮（既有纪律）。
@@ -926,6 +1063,7 @@ function init() {
   initModalFocusTrap(); // P2-5：全部浮层共用的 Tab 焦点陷阱，先于任何浮层打开
   initPrivacyOverlay();
   initBetaBadge();
+  initCoach();
   $('#disclosure-bar').textContent = `${DISCLOSURE}。`;
   showView('prepare');
   initOnboarding(); // 放在 showView 之后：首访聚焦引导按钮不被视图切换打断

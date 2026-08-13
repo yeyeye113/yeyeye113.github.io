@@ -96,6 +96,7 @@
           <button id="btn-share" class="btn gold">复制分享文本</button>
         </div>
         <p id="export-locked-hint" class="hint" hidden>解锁后导出完整版</p>
+        <button id="coach-link-row" class="coach-link-row" hidden>针对你的弱项，看这几条锦囊 →</button>
         <div id="report-content"></div>
       </div>
       <p id="disclosure-bar" class="disclosure-bar"></p>
@@ -121,6 +122,18 @@
         <button id="btn-onboarding-open" class="btn ghost">新手引导</button>
         <button id="btn-privacy" class="btn ghost">隐私承诺</button>
       </div>
+    </section>
+
+    <!-- ⑤ 锦囊页 -->
+    <section id="view-coach" class="view" hidden>
+      <h2 class="view-title">面试锦囊</h2>
+      <div id="coach-reco-bar" class="coach-reco-bar" hidden>
+        <span>按本场弱项推荐</span>
+        <button id="btn-coach-reco-clear" class="btn ghost small">看全部</button>
+      </div>
+      <input id="coach-search" type="search" placeholder="搜方法：追问、谈薪、反问…" aria-label="搜索锦囊">
+      <div id="coach-cats" class="coach-cats" role="group" aria-label="锦囊分类"></div>
+      <div id="coach-list" class="coach-list"></div>
     </section>
   </main>
 
@@ -201,6 +214,7 @@
     <button class="tab" data-view="interview">面试</button>
     <button class="tab" data-view="report">报告</button>
     <button class="tab" data-view="ledger">台账</button>
+    <button class="tab" data-view="coach">锦囊</button>
   </nav>
 
   <div id="toast" class="toast" hidden></div>
