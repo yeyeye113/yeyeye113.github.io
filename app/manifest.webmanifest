@@ -1,0 +1,25 @@
+{
+  "name": "过面 · AI 模拟面试官",
+  "short_name": "过面",
+  "description": "求职者的赛前陪练：本地优先的 AI 模拟面试官，简历与作答零上传。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#1f3a5f",
+  "background_color": "#0d1420",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/app/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/app/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

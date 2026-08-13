@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d1420">
+  <meta name="description" content="求职者的赛前陪练：贴上 JD 和简历，AI 面试官逐题拷问追问，给逐题打分的改进报告。本地优先，简历零上传。">
+  <meta property="og:title" content="过面 · AI 模拟面试官">
+  <meta property="og:description" content="求职者的赛前陪练：AI 面试官按目标岗位逐题拷问、追问，给五维评分与改进报告。本地优先，简历零上传。">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="/app/icons/icon-512.svg">
+  <meta name="twitter:card" content="summary">
+  <title>过面 · AI 模拟面试官</title>
+  <link rel="manifest" href="/app/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/app/icons/icon-192.svg">
+  <link rel="stylesheet" href="/app/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>过面</h1>
+    <span class="tagline">AI 模拟面试官 · 本地优先 · 简历不上传</span>
+    <button id="beta-badge" class="beta-badge" hidden aria-haspopup="dialog" aria-controls="beta-overlay">公测</button>
+  </header>
+
+  <main id="app">
+    <!-- ① 准备页 -->
+    <section id="view-prepare" class="view">
+      <h2 class="view-title">准备一场模拟面试</h2>
+
+      <div class="field-label">手头没有现成 JD？点一个示例，10 秒开一场</div>
+      <div id="sample-options" class="pill-group" role="group" aria-label="一键填充示例数据"></div>
+
+      <label class="field-label" for="jd-input">目标岗位 JD</label>
+      <textarea id="jd-input" rows="6"
+        placeholder="贴目标岗位 JD，或点上方示例试一场（岗位名、职责、任职要求都要）。内容只留在你的浏览器里，不会上传。"></textarea>
+
+      <label class="field-label" for="resume-input">你的简历（可选，贴了报告会给匹配度与缺口）</label>
+      <textarea id="resume-input" rows="6"
+        placeholder="贴上简历正文或项目经历。留空也能面，但报告里就没有 JD 匹配度一节了。"></textarea>
+
+      <div class="field-label">面试模式</div>
+      <div id="mode-options" class="pill-group" role="radiogroup" aria-label="面试模式"></div>
+
+      <div class="field-label">面试官风格</div>
+      <div id="style-options" class="pill-group" role="radiogroup" aria-label="面试官风格"></div>
+
+      <div class="field-label">题数</div>
+      <div id="rounds-options" class="pill-group" role="radiogroup" aria-label="题数"></div>
+
+      <details id="llm-panel" class="llm-panel">
+        <summary>AI 增强（可选）</summary>
+        <p class="hint">留空即纯本地模式，出题、追问、评分、报告全部离线可用。填了只用于润色追问措辞。</p>
+        <label class="field-label" for="llm-baseurl">baseURL</label>
+        <input id="llm-baseurl" type="url" placeholder="https://api.example.com/v1" autocomplete="off">
+        <label class="field-label" for="llm-apikey">apiKey</label>
+        <input id="llm-apikey" type="password" placeholder="sk-…" autocomplete="off">
+        <label class="field-label" for="llm-model">model</label>
+        <input id="llm-model" type="text" placeholder="模型名" autocomplete="off">
+        <p class="hint gold">apiKey 只存在本页内存里，不会保存——刷新页面即清空。</p>
+      </details>
+
+      <button id="btn-start" class="btn primary block">开始面试</button>
+    </section>
+
+    <!-- ② 面试页 -->
+    <section id="view-interview" class="view" hidden>
+      <div id="interview-empty" class="empty-state">
+        <p>还没有进行中的面试。</p>
+        <p>去「准备」页贴上 JD，和面试官打一场吧。</p>
+      </div>
+      <div id="interview-main" hidden>
+        <div class="progress-row">
+          <span id="progress-text">第 1/共 8 题</span>
+          <button id="btn-early-finish" class="btn ghost small">提前交卷</button>
+        </div>
+        <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+        <div id="chat-log" class="chat-log" aria-live="polite"></div>
+        <div class="composer">
+          <textarea id="answer-input" rows="3" placeholder="像真实面试一样，把回答完整说出来…"></textarea>
+          <button id="btn-submit" class="btn primary">提交回答</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ③ 报告页 -->
+    <section id="view-report" class="view" hidden>
+      <div id="report-empty" class="empty-state">
+        <p>还没有报告。</p>
+        <p>完成一场模拟面试后，这里会生成逐题诊断报告；历史报告在「台账」页可回看。</p>
+      </div>
+      <div id="report-main" hidden>
+        <div class="report-actions" role="toolbar" aria-label="报告导出">
+          <button id="btn-copy-md" class="btn gold">复制全文</button>
+          <button id="btn-download-md" class="btn gold">下载 .md</button>
+          <button id="btn-share" class="btn gold">复制分享文本</button>
+        </div>
+        <p id="export-locked-hint" class="hint" hidden>解锁后导出完整版</p>
+        <div id="report-content"></div>
+      </div>
+      <p id="disclosure-bar" class="disclosure-bar"></p>
+    </section>
+
+    <!-- ④ 台账页 -->
+    <section id="view-ledger" class="view" hidden>
+      <h2 class="view-title">练习台账</h2>
+      <div id="entitlement-card" class="card"></div>
+      <div class="card">
+        <h3 class="card-title">分数趋势</h3>
+        <div id="trend-chart" class="trend-chart"></div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">最近一场五维雷达</h3>
+        <div id="radar-chart" class="radar-chart"></div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">练习历史</h3>
+        <ul id="history-list" class="history-list"></ul>
+      </div>
+      <div class="ledger-footer">
+        <button id="btn-onboarding-open" class="btn ghost">新手引导</button>
+        <button id="btn-privacy" class="btn ghost">隐私承诺</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- 首访三步引导浮层（只弹一次，标志位 guomian:onboarded；图形全部 inline SVG，无新资产文件） -->
+  <div id="onboarding-overlay" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <h3 id="onboarding-title">三步，打一场真刀真枪的模拟面试</h3>
+      <ol class="onboarding-steps">
+        <li>
+          <span class="step-graphic" aria-hidden="true">
+            <svg viewBox="0 0 40 40" width="40" height="40">
+              <rect x="7" y="4" width="26" height="32" rx="4" fill="none" stroke="#c9a227" stroke-width="2"/>
+              <line x1="13" y1="13" x2="27" y2="13" stroke="#c9a227" stroke-width="2" stroke-linecap="round"/>
+              <line x1="13" y1="20" x2="27" y2="20" stroke="#8fa3bd" stroke-width="2" stroke-linecap="round"/>
+              <line x1="13" y1="27" x2="22" y2="27" stroke="#8fa3bd" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <p>贴上目标岗位 JD 和你的简历——手头没有就点示例，10 秒开场。</p>
+        </li>
+        <li>
+          <span class="step-graphic" aria-hidden="true">
+            <svg viewBox="0 0 40 40" width="40" height="40">
+              <rect x="4" y="6" width="22" height="15" rx="5" fill="none" stroke="#c9a227" stroke-width="2"/>
+              <path d="M11 21 L11 27 L17 21" fill="none" stroke="#c9a227" stroke-width="2" stroke-linejoin="round"/>
+              <rect x="18" y="20" width="18" height="12" rx="4" fill="none" stroke="#8fa3bd" stroke-width="2"/>
+              <circle cx="12" cy="13.5" r="1.6" fill="#c9a227"/>
+              <circle cx="17" cy="13.5" r="1.6" fill="#c9a227"/>
+              <circle cx="22" cy="13.5" r="1.6" fill="#c9a227"/>
+            </svg>
+          </span>
+          <p>AI 面试官逐题拷问，答得含糊会被当场追问。</p>
+        </li>
+        <li>
+          <span class="step-graphic" aria-hidden="true">
+            <svg viewBox="0 0 40 40" width="40" height="40">
+              <polygon points="20,5 34,15 29,32 11,32 6,15" fill="none" stroke="#8fa3bd" stroke-width="2" stroke-linejoin="round"/>
+              <polygon points="20,11 29,17.5 26,28 14,28 11,17.5" fill="rgba(201,162,39,0.28)" stroke="#c9a227" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <p>收报告：逐题诊断＋五维评分＋7 天冲刺计划。</p>
+        </li>
+      </ol>
+      <button id="btn-onboarding-start" class="btn primary block">开始体验</button>
+    </div>
+  </div>
+
+  <!-- 公测说明浮层（仅 BETA_FREE 时可打开，徽标在顶栏） -->
+  <div id="beta-overlay" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="beta-title">
+      <h3 id="beta-title">公测期说明</h3>
+      <ul class="privacy-points">
+        <li>公测期间全部功能免费，完整报告直接解锁，不限场次。</li>
+        <li>正式版将按场次收费，定价见报告页解锁卡。</li>
+        <li>你的 JD、简历、回答与报告始终只存在你本机，公测与否都不上传。</li>
+      </ul>
+      <button id="btn-beta-close" class="btn primary block">知道了</button>
+    </div>
+  </div>
+
+  <!-- 隐私承诺浮层（应用内要点摘录，完整文本在 docs/隐私政策.md） -->
+  <div id="privacy-overlay" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
+      <h3 id="privacy-title">隐私承诺</h3>
+      <ul class="privacy-points">
+        <li>JD、简历、回答与报告只存你设备的浏览器本地存储，不上传任何服务器。</li>
+        <li>出题、评分、报告全在本地算，断网也能完整跑完一场面试。</li>
+        <li>可选 AI 增强：问答内容只发往你自己填的第三方端点；apiKey 只存内存，关页即失。</li>
+        <li>清除浏览器站点数据即删除全部记录——我们无从恢复，也无从知晓。</li>
+        <li>当前版本无 Cookie、无埋点、无第三方统计。</li>
+      </ul>
+      <p class="hint">完整文本（逐条带代码背书）见项目 docs/隐私政策.md。</p>
+      <button id="btn-privacy-close" class="btn primary block">知道了</button>
+    </div>
+  </div>
+
+  <nav class="tabbar" aria-label="主导航">
+    <button class="tab active" data-view="prepare">准备</button>
+    <button class="tab" data-view="interview">面试</button>
+    <button class="tab" data-view="report">报告</button>
+    <button class="tab" data-view="ledger">台账</button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="/app/app.js"></script>
+</body>
+</html>
