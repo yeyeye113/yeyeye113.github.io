@@ -22,6 +22,18 @@ function createMemoryBackend() {
   };
 }
 
+// 修剪判据（V2.2 P1-2）：按 savedAt 数字找最旧，不按插入顺序——备份恢复后新旧记录混排，
+// 插入顺序不再等于时间顺序。savedAt 非有限数字视为最旧优先牺牲；同值取最先插入的（稳定）。
+function oldestIndex(list) {
+  let idx = 0;
+  for (let i = 1; i < list.length; i++) {
+    const a = Number.isFinite(list[i]?.savedAt) ? list[i].savedAt : -Infinity;
+    const b = Number.isFinite(list[idx]?.savedAt) ? list[idx].savedAt : -Infinity;
+    if (a < b) idx = i;
+  }
+  return idx;
+}
+
 export function createStore(backend) {
   const be = backend && typeof backend.getItem === 'function' ? backend : createMemoryBackend();
   let seq = 0;
@@ -104,18 +116,25 @@ export function createStore(backend) {
       const list = readList(KEYS.sessions);
       const input = resultWithReport && typeof resultWithReport === 'object' ? resultWithReport : {};
       const existingIdx = input.id ? list.findIndex((s) => s && s.id === input.id) : -1;
+      const existing = existingIdx >= 0 ? list[existingIdx] : null;
+      // 契约 §9（V1.2 P0-1 + V2.2 P1-2）：savedAt 为 epoch 毫秒数字——传入有限数字则保留
+      // （备份恢复时间保真）；upsert 未传时保留原记录值（改 report 不改时间线位置）；
+      // ISO 字符串/NaN 等坏值仍盖 Date.now()（P0 防线不回退）。
+      let savedAt;
+      if (Number.isFinite(input.savedAt)) savedAt = input.savedAt;
+      else if (existing && Number.isFinite(existing.savedAt)) savedAt = existing.savedAt;
+      else savedAt = Date.now();
       const record = {
         ...input,
-        id: existingIdx >= 0 ? input.id : (input.id || genId('s', list)),
-        // 契约 §9（V1.2 P0-1）：savedAt 为 epoch 毫秒数字，消费端按数字排序与格式化
-        savedAt: Date.now(),
+        id: existing ? input.id : (input.id || genId('s', list)),
+        savedAt,
       };
-      if (existingIdx >= 0) {
+      if (existing) {
         list[existingIdx] = record; // 同 id 覆盖更新，不追加
       } else {
         list.push(record);
       }
-      while (list.length > MAX_SESSIONS) list.shift(); // 修剪最旧
+      while (list.length > MAX_SESSIONS) list.splice(oldestIndex(list), 1); // 按 savedAt 剪最旧
       return write(KEYS.sessions, list) ? record : false;
     },
     listSessions() {

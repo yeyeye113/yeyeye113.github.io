@@ -12,7 +12,7 @@ import { getPersona, listStyles } from '/src/prompts/index.mjs';
 import { buildReport, DISCLOSURE } from '/src/report/index.mjs';
 import { toMarkdown, toShareText, suggestFilename } from '/src/export/index.mjs';
 // 契约 §9/§10 消费面：storage 与 monetize 由并行子代理施工，路径按契约写死
-import { createStore } from '/src/storage/index.mjs';
+import { createStore, MAX_SESSIONS } from '/src/storage/index.mjs';
 import { SKUS, getEntitlements, canUnlock, unlockReport, grantSku, redeemCode, betaUnlock } from '/src/monetize/index.mjs';
 // 公测开关（契约 §10 V1.7）：单布尔单真源，正式售卖时只改 src/config 这一处
 import { BETA_FREE } from '/src/config/index.mjs';
@@ -129,6 +129,12 @@ function toast(msg) {
 }
 
 function showView(name) {
+  // P2-2（V2.2）：识别中切视图不许留悬挂的活麦克风——停止但保留已识别文本进输入框
+  // （用户可能只是误触 tab，回来答案还在）；stopRequested 窗口内不重复提示
+  if (voice.rec && !voice.stopRequested) {
+    stopVoiceInput();
+    toast('语音输入已停止');
+  }
   for (const view of document.querySelectorAll('.view')) {
     view.hidden = view.id !== `view-${name}`;
   }
@@ -533,6 +539,9 @@ function doUnlock() {
   } catch (err) {
     if (err && err.name === 'NoCreditError') {
       toast('暂无可用权益：先点一个「模拟购买」或输入体验码');
+    } else if (err && err.name === 'SessionNotFoundError') {
+      // P2-4：覆盖导入等操作清掉旧场后，残留指针解锁会走到这——不吐内部错误形状
+      toast('该场记录已不存在，请重新完成一场面试');
     } else {
       toast(`解锁失败：${err?.message ?? '未知错误'}`);
     }
@@ -1124,10 +1133,12 @@ function initCoach() {
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 const voice = {
-  rec: null,        // 当前识别实例（识别中非 null，防重复启动）
-  baseText: '',     // 开始聆听时输入框已有文本快照，识别结果拼在其后
-  finalText: '',    // 已定稿的识别文本累积
-  errored: false,   // onerror 后 onend 还会来一次，防 toast 双发
+  rec: null,           // 当前识别实例（识别中非 null，防重复启动）
+  baseText: '',        // 开始聆听时输入框已有文本快照，识别结果拼在其后
+  finalText: '',       // 已定稿的识别文本累积
+  errored: false,      // onerror 后 onend 还会来一次，防 toast 双发
+  discard: false,      // 丢弃模式（V2.2 P1-1）：onend 不回写输入框（提交路径专用）
+  stopRequested: false, // stop 已发出、onend 未到的窗口标志（防重复 stop/toast）
 };
 
 function voiceErrorMessage(code) {
@@ -1147,8 +1158,19 @@ function setVoiceUi(listening) {
   $('#voice-hint').hidden = !listening;
 }
 
-function stopVoiceInput() {
+// 接缝防护（V2.2 P1-1）：rec.stop() 是异步的——onend 要过一拍才来。识别中点「提交」时，
+// 提交路径会消费并清空输入框；若 onend 仍无条件回写 baseText+finalText，上一题答案就会
+// 在空输入框里「复活」，极易被重复提交。提交/评分路径必须用 { discard:true } 停止：
+// 清掉快照并让 onend 跳过回写。手动点麦克风/切视图的停止仍走默认路径（文本保留）。
+function stopVoiceInput({ discard = false } = {}) {
   if (!voice.rec) return;
+  if (discard) {
+    voice.discard = true;
+    voice.baseText = '';
+    voice.finalText = '';
+  }
+  if (voice.stopRequested) return; // stop 已在路上，只需（可能的）discard 升级
+  voice.stopRequested = true;
   try { voice.rec.stop(); } catch { /* 已停的实例再 stop 不炸 */ }
 }
 
@@ -1160,6 +1182,8 @@ function startVoiceInput() {
   if (voice.baseText && !/\s$/.test(voice.baseText)) voice.baseText += ' ';
   voice.finalText = '';
   voice.errored = false;
+  voice.discard = false;
+  voice.stopRequested = false;
 
   const rec = new SpeechRec();
   rec.lang = 'zh-CN';
@@ -1276,8 +1300,13 @@ function resetReplaceButton() {
 
 function openImportOverlay(data, counts) {
   pendingImportData = data;
+  // P2-3（V2.2）：合并导入可能触发 MAX_SESSIONS 修剪（saveSession 挤掉最旧）——
+  // 现有＋导入超上限时提前预警。同 id 跳过会让实际写入偏少，这是保守估计。
+  const overflow = store.listSessions().length + counts.sessions > MAX_SESSIONS
+    ? `（超出上限 ${MAX_SESSIONS} 场，最早的记录将被自动清理）`
+    : '';
   $('#import-summary').textContent =
-    `将导入 ${counts.sessions} 场面试记录、${counts.profiles} 份档案、${counts.ledger} 条台账。`
+    `将导入 ${counts.sessions} 场面试记录${overflow}、${counts.profiles} 份档案、${counts.ledger} 条台账。`
     + '合并会保留现有记录（同一场不重复）；覆盖会先清空本机现有数据。';
   resetReplaceButton();
   $('#import-overlay').hidden = false;
@@ -1295,9 +1324,20 @@ function closeImportOverlay() {
 function runImport(mode) {
   if (!pendingImportData) return;
   const { imported } = importBackup(store, pendingImportData, { mode, wipe: wipeStoreFaces });
+
+  // P2-4（V2.2）：replace 清面后，报告页可能还握着被清掉那场的指针——解锁会撞
+  // SessionNotFoundError。清指针；报告视图若正显示旧场（防御，导入通常发起自台账页）回台账。
+  if (mode === 'replace') {
+    state.currentSessionId = null;
+    state.currentMeta = null;
+    if (!$('#view-report').hidden) showView('ledger');
+  }
+
   closeImportOverlay();
   renderLedger(); // 台账视图立即反映导入结果
-  toast(`导入完成：${imported.sessions} 场记录、${imported.profiles} 份档案、${imported.ledger} 条台账`
+  // P2-3：merge 可能触发 MAX_SESSIONS 修剪，报「实际写入数」会骗人——一并报最终存量
+  toast(`导入完成：新增 ${imported.sessions} 场记录、${imported.profiles} 份档案、${imported.ledger} 条台账`
+    + `，本机现有 ${store.listSessions().length} 场`
     + (imported.entitlements ? '，权益已更新' : ''));
 }
 

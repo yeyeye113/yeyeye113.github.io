@@ -243,7 +243,8 @@ export function sanitizeLlmConfig({ baseURL, apiKey, model, timeoutMs } = {}) {
 // 已知公开 API 语义带来的两处口径（对拍/去重按此设计，交付与测试同口径）：
 //   ① saveProfile 会重新发号（id/createdAt 刷新）——merge 判重按「id 或 jdText+resumeText
 //     内容相同」双条件，防重新发号后同备份二次导入翻倍；
-//   ② saveSession 会把 savedAt 刷成导入时刻（原 id 保留）——历史排序回退 endedAt 仍成立。
+//   ② savedAt：storage V2.2 契约起 saveSession 对「传入的有限数字 savedAt」优先保留——
+//     备份恢复不改写历史时间（接缝机检：test/ui-core.test.mjs 的 P1-2 用例）。
 
 const BACKUP_APP = 'guomian';
 const BACKUP_SCHEMA = 1;

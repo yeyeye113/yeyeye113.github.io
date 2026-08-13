@@ -1,6 +1,13 @@
-// src/drill/index.mjs — 错题本与弱项重练（契约 §15，V2.1 增）
+// src/drill/index.mjs — 错题本与弱项重练（契约 §15，V2.1 增；V2.2 毕业机制）
 // 刻意练习闭环：历史低分题自动聚合（collectMistakes）→ 一键组重练场（buildDrillPlan）。
 // 两函数纯、零 IO、零依赖、确定性：无随机、不洗牌——重练就该先练最弱的。
+//
+// 毕业口径（V2.2，五轮复核 P2-1 修复；契约 §15 语义微调由主会话收口时同步）：
+// 同 question.text 的全部历史作答按记录 savedAt 排时间序（坏值当 0；同刻——含同场多题位——
+// 按遍历序后者为近，store 追加序即时间序），**以最近一次作答的得分定去留**：
+// 最近一次 ≥ threshold 即毕业（不入错题本，重练打到高分就出本，闭环合上）；
+// 最近一次 < threshold 才在本，条目取该最近低分次的数据。drill 场自身的作答同样参与
+// 判定（重练又答砸继续在本——如实）。attempts 语义不变：历史答过总次数，不分高低分。
 //
 // 记录形状真源：src/storage/index.mjs saveSession ＋ app/app.js 落库调用——SessionResult
 // 字段（plan/answers/scores/savedAt）平铺在记录顶层；容忍嵌套 result 键的变体（先取
@@ -21,7 +28,8 @@ function toEpoch(v) {
 
 export function collectMistakes(sessions, { threshold = 60 } = {}) {
   const list = Array.isArray(sessions) ? sessions : [];
-  // 去重键 = question.text；value = { item: MistakeItem, attempts }
+  // 去重键 = question.text；value = { latest: 该题时间序最近一次作答, attempts }
+  // 毕业判定放收尾：先把每题的「最近一次」找出来，最后只留最近一次仍低分的题。
   const byText = new Map();
 
   for (const rec of list) {
@@ -43,24 +51,25 @@ export function collectMistakes(sessions, { threshold = 60 } = {}) {
       const key = question.text;
       let entry = byText.get(key);
       if (!entry) {
-        entry = { item: null, attempts: 0 };
+        entry = { latest: null, attempts: 0 };
         byText.set(key, entry);
       }
       entry.attempts += 1; // 该题历史出现总次数（不分高低分，答过就算一次）
 
-      if (score.total >= threshold) continue; // 只有低分次入错题本
-      // 同题去重保留最近一次：按 savedAt 数字比较，同刻取后遍历到的（store 追加序即时间序）
-      if (entry.item && entry.item.date > savedAt) continue;
+      // 只追踪时间序最近一次作答（不分高低分——去留由它定）：savedAt 数字为主序，
+      // 同刻（含同场多题位、坏 savedAt 同为 0）取后遍历到的，store 追加序即时间序。
+      if (entry.latest && entry.latest.date > savedAt) continue;
       const answerText = answers[i] && typeof answers[i].text === 'string' ? answers[i].text : '';
-      entry.item = { question, score, answerText, sessionId, date: savedAt, attempts: 0 };
+      entry.latest = { question, score, answerText, sessionId, date: savedAt, attempts: 0 };
     }
   }
 
   const mistakes = [];
   for (const entry of byText.values()) {
-    if (!entry.item) continue; // 该题从未低于阈值
-    entry.item.attempts = entry.attempts;
-    mistakes.push(entry.item);
+    // 毕业判定：最近一次 ≥ threshold 即出本；仍低分才在本，条目即该最近低分次
+    if (!entry.latest || entry.latest.score.total >= threshold) continue;
+    entry.latest.attempts = entry.attempts;
+    mistakes.push(entry.latest);
   }
   // 按 score.total 升序（sort 稳定，同分保持收集序）——最弱的排最前
   mistakes.sort((a, b) => a.score.total - b.score.total);
