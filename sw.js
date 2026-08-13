@@ -7,7 +7,7 @@
 // VERSION 与 package.json 的 version 联动机检：test/server.test.mjs 读两个文件断言一致，
 // 发版只改 package.json 不改这里会直接红（命理仓 V1.3 同款教训）。
 
-const VERSION = '0.7.1';
+const VERSION = '0.8.0';
 const CACHE_NAME = `guomian-v${VERSION}`;
 
 // 核心壳：应用外壳三件＋PWA 资产＋全部 /src 引擎模块（清单与盘上 17 个 .mjs 对齐）
@@ -21,6 +21,7 @@ const CORE_ASSETS = [
   '/src/config/index.mjs',
   '/src/coach/index.mjs',
   '/src/drill/index.mjs',
+  '/src/custom/index.mjs',
   '/docs/隐私政策.md',
   '/src/ui-core/index.mjs',
   '/src/samples/index.mjs',

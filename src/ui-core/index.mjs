@@ -2,9 +2,11 @@
 // V1.3 从 app/app.js 外移：全部为不碰 DOM、不碰全局状态的纯函数/纯数据变换，
 // 零 IO、零外部依赖，浏览器与 Node 双端可用；DOM 操作与事件绑定仍留在 app.js。
 // 机检跑道：test/ui-core.test.mjs。
-// 唯一仓内 import：评分引擎的 DIMS/DIM_LABELS（同为纯常量，契约 §4）——
-// 雷达轴顺序与中文标签只认评分引擎一处真源，不在这里手抄第二份。
+// 仓内 import 仅限纯常量（零 IO 纪律不破）：评分引擎的 DIMS/DIM_LABELS（契约 §4，
+// 雷达轴顺序与中文标签单一真源）；报告层的 DISCLOSURE（契约 §12 分享卡条款——
+// 披露句必须绘在卡面上且与 shareText 同源，不在这里手抄第二份）。
 import { DIMS, DIM_LABELS } from '../engine/scoring/index.mjs';
+import { DISCLOSURE } from '../report/index.mjs';
 
 // ---- 纯数据：模式与题数选项（准备页 pill 组与标签映射的单一真源） ----
 
@@ -150,6 +152,52 @@ export function abandonBadgeText(result) {
   return `提前交卷 · 已答 ${result?.answeredCount ?? '?'}/共 ${result?.totalCount ?? '?'}`;
 }
 
+// buildShareCardModel({ meta, sessionScore, jd })
+//   -> { title, subtitle, scoreText, scoreBand, scoreLabel, modeLine, dateLine,
+//        badges, radar, noRadar, footer, disclosure, filename }
+// V2.3 战绩分享卡的可测面（契约 §12/§13）：画卡所需的全部文本行与颜色档在这里定死，
+// canvas 只管照 model 画、不做任何判定。披露句同源 import DISCLOSURE（诚实承诺不因
+// 载体变化而豁免）；卡面不含用户身份信息与简历内容——model 字段只有分数与维度。
+// 分数带：≥80 gold / 60-79 mid / <60 low；总分非有限数字给占位「—」并落 mid（中性档，
+// 不给无分卡片挂红挂金）。徽标：abandoned 复用 abandonBadgeText 口径；mode 为
+// EXTRA_MODE_LABELS.drill 时带「弱项重练场」。缺 radar 标 noRadar=true 且 radar=null，
+// canvas 侧据此跳过雷达区。文件名沿 suggestFilename 风格：过面战绩-YYYYMMDD-N分.png。
+export function buildShareCardModel({ meta, sessionScore, jd } = {}) {
+  const total = Number.isFinite(sessionScore?.total) ? sessionScore.total
+    : (Number.isFinite(meta?.totalScore) ? meta.totalScore : null);
+  const scoreText = total == null ? '—' : String(total);
+  const scoreBand = total == null ? 'mid' : (total >= 80 ? 'gold' : (total >= 60 ? 'mid' : 'low'));
+
+  const badges = [];
+  const abandonText = abandonBadgeText(meta);
+  if (abandonText) badges.push(abandonText);
+  if (meta?.mode === EXTRA_MODE_LABELS.drill) badges.push('弱项重练场');
+
+  const radar = sessionScore?.radar && typeof sessionScore.radar === 'object' ? sessionScore.radar : null;
+  const dateLine = typeof meta?.date === 'string' && meta.date ? meta.date : '未知时间';
+  const domain = typeof jd?.domain === 'string' && jd.domain ? jd.domain : '通用';
+  // mode 来自 buildReportMeta（已是中文 label）；drill label 本身完整（「弱项重练」），
+  // 常规模式 label 是单词（「技术」等）需补「模拟面试」后缀成整句。
+  const mode = meta?.mode ?? '未知';
+  const modeLine = mode === EXTRA_MODE_LABELS.drill ? `${mode} · ${domain}` : `${mode}模拟面试 · ${domain}`;
+
+  return {
+    title: '过面',
+    subtitle: 'AI 模拟面试 · 练到心里有底',
+    scoreText,
+    scoreBand,
+    scoreLabel: '综合得分',
+    modeLine,
+    dateLine,
+    badges,
+    radar,
+    noRadar: radar == null,
+    footer: 'yeyeye113.github.io',
+    disclosure: DISCLOSURE,
+    filename: `过面战绩-${dateLine.replaceAll('-', '')}${total == null ? '' : `-${total}分`}.png`,
+  };
+}
+
 // buildTrendPoints(ledger, { width?, height?, pad?, maxPoints? })
 //   -> { width, height, pad, points: [{ x, y, value }] }
 // 趋势折线的坐标数学（SVG 字符串拼接留在前端）：纵轴固定 0-100（避免两点拉满全高
@@ -250,7 +298,9 @@ const BACKUP_APP = 'guomian';
 const BACKUP_SCHEMA = 1;
 
 // exportBackup(store) -> { payload, filename }
-// 四面聚合成带信封的 JSON 字符串 { app, schema, exportedAt(epoch ms), data:{四面} }；
+// 五面聚合成带信封的 JSON 字符串 { app, schema, exportedAt(epoch ms), data:{五面} }；
+// V2.3 起 data 增 custom（自定义题集）——schema 仍 1：纯增字段、旧读端不受影响，
+// validateBackup 对缺 custom 的旧备份宽容（当空数组），升 schema 反而会把旧应用挡在门外。
 // filename 形如「过面备份-20260813.json」（本地日期，与台账日期同源 localDateStr）。
 export function exportBackup(store) {
   const now = Date.now();
@@ -263,6 +313,7 @@ export function exportBackup(store) {
       sessions: store.listSessions(),
       entitlements: store.getEntitlements(),
       ledger: store.getLedger(),
+      custom: store.listCustomQuestions(),
     },
   };
   return {
@@ -302,10 +353,19 @@ export function validateBackup(text) {
   if (!d.entitlements || typeof d.entitlements !== 'object' || Array.isArray(d.entitlements)) {
     return { ok: false, reason: '备份数据不完整：entitlements 应为对象' };
   }
+  // custom（V2.3）向后兼容：旧备份没有该键——缺省当空数组放行；键存在则必须是数组
+  if (d.custom !== undefined && !Array.isArray(d.custom)) {
+    return { ok: false, reason: '备份数据不完整：custom 应为数组' };
+  }
   return {
     ok: true,
     data: d,
-    counts: { profiles: d.profiles.length, sessions: d.sessions.length, ledger: d.ledger.length },
+    counts: {
+      profiles: d.profiles.length,
+      sessions: d.sessions.length,
+      ledger: d.ledger.length,
+      custom: Array.isArray(d.custom) ? d.custom.length : 0,
+    },
   };
 }
 
@@ -320,8 +380,9 @@ function laterMemberUntil(a, b) {
 
 // importBackup(store, data, { mode:'merge'|'replace', wipe? }) -> { imported: counts }
 // merge：按 id 去重并入（profiles 加内容判重，见头注①）；ledger 按整条内容判重
-//   （条目无 id，重复并入会画歪趋势线）。
-// replace：先清四面再全量写入。store 公开面没有删除 API（刻意的——业务代码不该能删档），
+//   （条目无 id，重复并入会画歪趋势线）；custom 按 text 判重（V2.3，见面内注释）。
+// replace：先清各面再全量写入（wipe 回调按 guomian: 前缀清键，custom 面一并覆盖）。
+//   store 公开面没有删除 API（刻意的——业务代码不该能删档），
 //   「清面」由调用方注入 wipe 回调完成（app.js 删 localStorage 四面键 / 测试清内存 backend），
 //   ui-core 保持零 IO。
 // 权益 merge 的对抗性思考：credits 取两者较大值、memberUntil 取较晚——不取相加，
@@ -332,7 +393,7 @@ function laterMemberUntil(a, b) {
 export function importBackup(store, data, { mode = 'merge', wipe } = {}) {
   const merge = mode !== 'replace';
   if (!merge && typeof wipe === 'function') wipe();
-  const imported = { profiles: 0, sessions: 0, ledger: 0, entitlements: false };
+  const imported = { profiles: 0, sessions: 0, ledger: 0, custom: 0, entitlements: false };
 
   const existingProfiles = merge ? store.listProfiles() : [];
   const profileSeen = (p) => existingProfiles.some((e) => e
@@ -356,6 +417,18 @@ export function importBackup(store, data, { mode = 'merge', wipe } = {}) {
   for (const entry of data?.ledger ?? []) {
     if (merge && existingLedger.has(JSON.stringify(entry))) continue;
     if (store.appendLedger(entry)) imported.ledger += 1;
+  }
+
+  // custom（V2.3）：merge 按 text 判重（addCustomQuestion 重新发号，id 判重必失效；
+  // 同题文重录没有价值）；MAX_CUSTOM 满则 addCustomQuestion 拒收返回 false 不计数——
+  // 上限语义在 storage 一处真源，这里不复制第二份判断。旧备份无 custom 键时循环体零次。
+  const existingCustomTexts = merge
+    ? new Set(store.listCustomQuestions().map((q) => q?.text))
+    : new Set();
+  for (const q of data?.custom ?? []) {
+    if (!q || typeof q !== 'object') continue;
+    if (merge && existingCustomTexts.has(q.text)) continue;
+    if (store.addCustomQuestion({ text: q.text, type: q.type })) imported.custom += 1;
   }
 
   const incoming = data?.entitlements ?? {};

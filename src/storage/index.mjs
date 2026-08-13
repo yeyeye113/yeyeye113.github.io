@@ -9,9 +9,13 @@ const KEYS = {
   sessions: `${PREFIX}sessions`,
   entitlements: `${PREFIX}entitlements`,
   ledger: `${PREFIX}ledger`,
+  custom: `${PREFIX}custom`,
 };
 
 export const MAX_SESSIONS = 30;
+// 自定义题集上限（契约 §9 V2.3）：超限拒收返回 false、零写入——与 sessions 的「剪最旧」相反，
+// 用户手录的题不许被机器丢，满了只能由用户自己删。
+export const MAX_CUSTOM = 50;
 
 function createMemoryBackend() {
   const m = new Map();
@@ -158,6 +162,25 @@ export function createStore(backend) {
     },
     setEntitlements(e) {
       return write(KEYS.entitlements, e);
+    },
+
+    // ---------- custom（自定义题集，V2.3）：满则拒收，绝不修剪 ----------
+    addCustomQuestion({ text, type } = {}) {
+      const list = readList(KEYS.custom);
+      if (list.length >= MAX_CUSTOM) return false; // 超限拒收，零写入
+      const record = { id: genId('c', list), text, type, createdAt: Date.now() };
+      list.push(record);
+      return write(KEYS.custom, list) ? record : false;
+    },
+    listCustomQuestions() {
+      return readList(KEYS.custom);
+    },
+    removeCustomQuestion(id) {
+      const list = readList(KEYS.custom);
+      const idx = list.findIndex((q) => q && q.id === id);
+      if (idx < 0) return false;
+      list.splice(idx, 1);
+      return write(KEYS.custom, list);
     },
 
     // ---------- ledger（练习台账：场次与分数趋势） ----------

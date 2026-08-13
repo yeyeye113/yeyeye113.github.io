@@ -39,6 +39,18 @@
         <button id="btn-drill-start" class="btn gold block">开练（最多 5 题）</button>
       </div>
 
+      <!-- 我的题集（V2.3）：手录真实面试题，开场可勾选混入（契约 §16） -->
+      <details id="custom-panel" class="llm-panel custom-panel">
+        <summary>我的题集（<span id="custom-count">0</span> 道）</summary>
+        <p id="custom-empty" class="hint">把真实面试遇到的题记下来，下次开练自动拷问你。</p>
+        <ul id="custom-list" class="custom-list"></ul>
+        <label class="field-label" for="custom-text">添加一道题</label>
+        <textarea id="custom-text" rows="2" placeholder="例：讲讲你处理过最棘手的线上故障"></textarea>
+        <div class="field-label">题目类型</div>
+        <div id="custom-type-options" class="pill-group" role="radiogroup" aria-label="自定义题类型"></div>
+        <button id="btn-custom-add" class="btn gold block">加入题集</button>
+      </details>
+
       <label class="field-label" for="jd-input">目标岗位 JD</label>
       <textarea id="jd-input" rows="6"
         placeholder="贴目标岗位 JD，或点上方示例试一场（岗位名、职责、任职要求都要）。内容只留在你的浏览器里，不会上传。"></textarea>
@@ -67,6 +79,12 @@
         <input id="llm-model" type="text" placeholder="模型名" autocomplete="off">
         <p class="hint gold">apiKey 只存在本页内存里，不会保存——刷新页面即清空。</p>
       </details>
+
+      <!-- 出题混入（V2.3）：题集空时整行隐藏；重练场不走这里（drill 专注错题） -->
+      <label id="mix-custom-row" class="mix-custom-row" hidden>
+        <input type="checkbox" id="mix-custom">
+        <span id="mix-custom-label">混入我的题集</span>
+      </label>
 
       <button id="btn-start" class="btn primary block">开始面试</button>
     </section>
@@ -112,6 +130,8 @@
           <button id="btn-copy-md" class="btn gold">复制全文</button>
           <button id="btn-download-md" class="btn gold">下载 .md</button>
           <button id="btn-share" class="btn gold">复制分享文本</button>
+          <!-- 战绩分享卡（V2.3）：canvas 不支持时保持 hidden（app.js 探测后放开） -->
+          <button id="btn-share-card" class="btn gold" hidden>生成分享图</button>
         </div>
         <p id="export-locked-hint" class="hint" hidden>解锁后导出完整版</p>
         <button id="coach-link-row" class="coach-link-row" hidden>针对你的弱项，看这几条锦囊 →</button>

@@ -12,7 +12,7 @@ import { getPersona, listStyles } from '/src/prompts/index.mjs';
 import { buildReport, DISCLOSURE } from '/src/report/index.mjs';
 import { toMarkdown, toShareText, suggestFilename } from '/src/export/index.mjs';
 // 契约 §9/§10 消费面：storage 与 monetize 由并行子代理施工，路径按契约写死
-import { createStore, MAX_SESSIONS } from '/src/storage/index.mjs';
+import { createStore, MAX_SESSIONS, MAX_CUSTOM } from '/src/storage/index.mjs';
 import { SKUS, getEntitlements, canUnlock, unlockReport, grantSku, redeemCode, betaUnlock } from '/src/monetize/index.mjs';
 // 公测开关（契约 §10 V1.7）：单布尔单真源，正式售卖时只改 src/config 这一处
 import { BETA_FREE } from '/src/config/index.mjs';
@@ -22,6 +22,8 @@ import { TIPS, listCategories, searchTips, getTipsByCategory, recommendTips } fr
 import { SAMPLES } from '/src/samples/index.mjs';
 // 错题本与弱项重练（契约 §15 V2.1）：低分题聚合＋一键组重练场
 import { collectMistakes, buildDrillPlan } from '/src/drill/index.mjs';
+// 自定义题集（契约 §16 V2.3）：手录题转 Question 形状＋混排进既有 plan
+import { makeCustomQuestion, mixIntoPlan } from '/src/custom/index.mjs';
 // 接缝层纯逻辑（契约 §13，V1.3 外移）：机检在 test/ui-core.test.mjs
 import {
   MODE_OPTIONS,
@@ -41,6 +43,7 @@ import {
   validateBackup,
   importBackup,
   buildDrillSummary,
+  buildShareCardModel,
 } from '/src/ui-core/index.mjs';
 
 // 趋势折线 SVG 拼接（坐标数学在 ui-core.buildTrendPoints，这里只出字符串）。
@@ -141,7 +144,10 @@ function showView(name) {
   for (const tab of document.querySelectorAll('.tabbar .tab')) {
     tab.classList.toggle('active', tab.dataset.view === name);
   }
-  if (name === 'prepare') renderDrillCard(); // 重练卡随历史数据变化（打完一场回来要刷新）
+  if (name === 'prepare') {
+    renderDrillCard(); // 重练卡随历史数据变化（打完一场回来要刷新）
+    renderCustomSection(); // 题集随增删/备份导入变化（V2.3）
+  }
   if (name === 'ledger') renderLedger();
   if (name === 'report') renderReportView();
   if (name === 'coach') renderCoach();
@@ -291,7 +297,28 @@ function doStartDrill() {
     renderDrillCard();
     return;
   }
+  launchDrillSession(plan, sessions);
+}
 
+// V2.3 错题单题直达：台账错题行「重练这题」→ rounds:1 单题场；
+// jd 来源与整批重练同一套取舍（launchDrillSession 内注释）
+function startSingleDrill(mistake) {
+  try {
+    const plan = buildDrillPlan([mistake], { rounds: 1, seed: Date.now() });
+    if (!plan) {
+      toast('这道题暂时无法重练，请刷新台账后再试');
+      return;
+    }
+    launchDrillSession(plan, store.listSessions());
+  } catch (err) {
+    toast(`重练开场失败：${err?.message ?? '未知错误'}，请重试`);
+  }
+}
+
+// 重练场公共开场（V2.1 整批入口与 V2.3 单题直达共用）。
+// 自定义题集不混入重练场：drill 的价值是把历史低分题逐一答透，掺新题会稀释焦点；
+// 想练自定义题走准备页「混入我的题集」勾选（V2.3 取舍）。
+function launchDrillSession(plan, sessions) {
   // jd 来源取舍：重练题自带 refPoints（评分主锚点），但 scoreAnswer({question,answer,jd})
   // 契约需要 jd 供「JD 关键词覆盖率」一项。取最近一场落库记录随存的 jd 对象——与错题
   // 出处同源概率最高；一条都取不到时退 parseJD('') 的合法空形状（只弱化 JD 覆盖率
@@ -332,6 +359,72 @@ function doStartDrill() {
   toast(`弱项重练开场：${plan.questions.length} 道历史低分题，这次把它们答透`);
 }
 
+// ---------------- ① 准备页：我的题集（V2.3，契约 §16） ----------------
+
+// 六类枚举展示序与 src/custom 的 TYPES 同源（§16：枚举外一律回落「行为」，这里不扩）
+const CUSTOM_TYPE_OPTIONS = ['开场', '行为', '技术', '项目深挖', '压力', '反问']
+  .map((t) => ({ value: t, label: t }));
+
+function renderCustomSection() {
+  const list = store.listCustomQuestions();
+  $('#custom-count').textContent = String(list.length);
+  $('#custom-empty').hidden = list.length > 0;
+  const ul = $('#custom-list');
+  ul.innerHTML = '';
+  for (const q of list) {
+    const li = document.createElement('li');
+    li.className = 'custom-item';
+    const typeSpan = document.createElement('span');
+    typeSpan.className = 'c-type';
+    typeSpan.textContent = q.type ?? '行为';
+    const textSpan = document.createElement('span');
+    textSpan.className = 'c-text';
+    textSpan.textContent = q.text ?? ''; // 展示截断走 CSS ellipsis，数据不截
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn ghost small c-del';
+    delBtn.textContent = '删除';
+    delBtn.addEventListener('click', () => {
+      if (!window.confirm(`删除这道题？\n${q.text}`)) return;
+      store.removeCustomQuestion(q.id);
+      renderCustomSection();
+    });
+    li.append(typeSpan, textSpan, delBtn);
+    ul.append(li);
+  }
+  // 混入行随题集数量联动：空则整行隐藏（勾选状态留在 checkbox 上，无需持久化）
+  $('#mix-custom-row').hidden = list.length === 0;
+  $('#mix-custom-label').textContent = `混入我的题集（${list.length} 道）`;
+}
+
+function addCustomFromForm() {
+  // makeCustomQuestion 是校验真源（trim 后 <5 字返回 null），不在这里抄第二份判断
+  const q = makeCustomQuestion({
+    text: $('#custom-text').value,
+    type: selectedValue('customType') ?? '行为',
+  });
+  if (!q) {
+    toast('题目至少 5 个字');
+    return;
+  }
+  // storage 只落 text/type：Question 形状（refPoints 等）由开场时 makeCustomQuestion
+  // 现做——词法将来升级时老题自动受益，不落盘过期形状
+  const saved = store.addCustomQuestion({ text: q.text, type: q.type });
+  if (!saved) {
+    toast(`题集已满 ${MAX_CUSTOM} 道，删几道再加`);
+    return;
+  }
+  $('#custom-text').value = '';
+  renderCustomSection();
+  toast('已加入题集');
+}
+
+function initCustomQuestions() {
+  pillGroup($('#custom-type-options'), 'customType', CUSTOM_TYPE_OPTIONS, '行为');
+  $('#btn-custom-add').addEventListener('click', addCustomFromForm);
+  renderCustomSection();
+}
+
 // ---------------- ① 准备页：开始面试 ----------------
 
 function startInterview() {
@@ -357,7 +450,7 @@ function doStartInterview(jdText, resumeText) {
   const rounds = Number(selectedValue('rounds'));
   const style = selectedValue('style');
 
-  const plan = planInterview({
+  let plan = planInterview({
     jd,
     resume: resume ?? undefined,
     match: match ?? undefined,
@@ -365,6 +458,13 @@ function doStartInterview(jdText, resumeText) {
     rounds,
     seed: Date.now(),
   });
+  // V2.3 出题混入：勾选才混（默认关，渐进选择）；Question 形状由 makeCustomQuestion
+  // 现做（storage 只存 text/type）。重练场不走此路径——drill 专注错题不混入。
+  if (!$('#mix-custom-row').hidden && $('#mix-custom').checked) {
+    plan = mixIntoPlan(plan, store.listCustomQuestions()
+      .map((q) => makeCustomQuestion({ text: q.text, type: q.type }))
+      .filter(Boolean));
+  }
   const persona = getPersona({ style, domain: jd.domain });
 
   // apiKey 只存内存变量（这里的局部量），绝不写入 storage；清洗逻辑在 ui-core
@@ -784,6 +884,167 @@ function shareReport() {
   copyToClipboard(toShareText(state.currentReport), '分享文本已复制到剪贴板（含披露句）');
 }
 
+// ---------------- 战绩分享卡（V2.3，契约 §12） ----------------
+// canvas 只管照 buildShareCardModel 画：文案/颜色档/徽标判定全部在 ui-core 可测面。
+// 卡面只有分数与维度，不含用户身份信息与简历内容；披露句必须整行绘制在卡面上
+// （诚实承诺不因载体变化而豁免，与 shareText 同源 DISCLOSURE）。
+
+const SHARE_CARD_W = 1080;
+const SHARE_CARD_H = 1350; // 3:4 竖版，适配小红书
+// 分数带三档色（model.scoreBand 判定在 ui-core）：金 / 蓝灰 / 暗红
+const SHARE_BAND_COLORS = { gold: '#c9a227', mid: '#9fb0c9', low: '#c75c4a' };
+
+function canvasSupported() {
+  try {
+    const c = document.createElement('canvas');
+    return typeof c.getContext === 'function' && Boolean(c.getContext('2d'));
+  } catch {
+    return false;
+  }
+}
+
+// buildRadarPoints 的 'x,y x,y' 顶点串解析成数字对——SVG 版与 canvas 版共用同一坐标真源
+function parseSvgPoints(str) {
+  return String(str).split(' ').filter(Boolean).map((p) => p.split(',').map(Number));
+}
+
+function traceCardPolygon(ctx, pts, dx, dy) {
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x + dx, y + dy) : ctx.lineTo(x + dx, y + dy)));
+  ctx.closePath();
+}
+
+function drawShareCard(model) {
+  const canvas = document.createElement('canvas');
+  canvas.width = SHARE_CARD_W;
+  canvas.height = SHARE_CARD_H;
+  const ctx = canvas.getContext('2d');
+  const cx = SHARE_CARD_W / 2;
+  const font = (px, bold = false) => {
+    ctx.font = `${bold ? '700 ' : ''}${px}px "PingFang SC", "Microsoft YaHei", sans-serif`;
+  };
+
+  // 深藏青底（比主题主色 #1f3a5f 深一档，金字对比更足）
+  ctx.fillStyle = '#14213a';
+  ctx.fillRect(0, 0, SHARE_CARD_W, SHARE_CARD_H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 品牌区：产品名＋副题＋分隔线
+  ctx.fillStyle = '#c9a227';
+  font(96, true);
+  ctx.fillText(model.title, cx, 140);
+  ctx.fillStyle = 'rgba(230,236,245,0.6)';
+  font(36);
+  ctx.fillText(model.subtitle, cx, 222);
+  ctx.strokeStyle = 'rgba(201,162,39,0.35)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(220, 278);
+  ctx.lineTo(860, 278);
+  ctx.stroke();
+
+  // 总分大字（带色）＋标签＋徽标行（重练/提前交卷）
+  ctx.fillStyle = SHARE_BAND_COLORS[model.scoreBand] ?? SHARE_BAND_COLORS.mid;
+  font(210, true);
+  ctx.fillText(model.scoreText, cx, 430);
+  ctx.fillStyle = 'rgba(230,236,245,0.6)';
+  font(38);
+  ctx.fillText(model.scoreLabel, cx, 548);
+  if (model.badges.length > 0) {
+    ctx.fillStyle = '#c9a227';
+    font(34);
+    ctx.fillText(model.badges.join('　'), cx, 610);
+  }
+
+  // 五维雷达（坐标同源 buildRadarPoints）；noRadar 时占位一行不留空洞
+  if (model.noRadar) {
+    ctx.fillStyle = 'rgba(230,236,245,0.4)';
+    font(32);
+    ctx.fillText('本场无五维数据', cx, 830);
+  } else {
+    const size = 400;
+    const { center, axes, polygon, gridPolygons } = buildRadarPoints(model.radar, { size });
+    const dx = cx - center;
+    const dy = 840 - center;
+    ctx.strokeStyle = 'rgba(230,236,245,0.22)';
+    ctx.lineWidth = 1.5;
+    for (const ring of gridPolygons) {
+      traceCardPolygon(ctx, parseSvgPoints(ring), dx, dy);
+      ctx.stroke();
+    }
+    for (const a of axes) {
+      ctx.beginPath();
+      ctx.moveTo(center + dx, center + dy);
+      ctx.lineTo(a.x + dx, a.y + dy);
+      ctx.stroke();
+    }
+    traceCardPolygon(ctx, parseSvgPoints(polygon), dx, dy);
+    ctx.fillStyle = 'rgba(201,162,39,0.25)';
+    ctx.fill();
+    ctx.strokeStyle = '#c9a227';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    // 轴端标签沿轴向外推（与 SVG 版同思路，canvas 统一居中锚）
+    ctx.fillStyle = 'rgba(230,236,245,0.75)';
+    font(30);
+    for (const a of axes) {
+      const vx = a.x - center;
+      const vy = a.y - center;
+      const len = Math.hypot(vx, vy) || 1;
+      ctx.fillText(a.label, a.x + (vx / len) * 52 + dx, a.y + (vy / len) * 42 + dy);
+    }
+  }
+
+  // 场次信息：模式与领域行＋日期行
+  ctx.fillStyle = 'rgba(230,236,245,0.9)';
+  font(40);
+  ctx.fillText(model.modeLine, cx, 1105);
+  ctx.fillStyle = 'rgba(230,236,245,0.55)';
+  font(34);
+  ctx.fillText(model.dateLine, cx, 1165);
+
+  // 底部：站点地址＋披露句整行（字号小但完整绘制，契约硬条款）
+  ctx.fillStyle = '#c9a227';
+  font(34);
+  ctx.fillText(model.footer, cx, 1245);
+  ctx.fillStyle = 'rgba(230,236,245,0.5)';
+  font(28);
+  ctx.fillText(model.disclosure, cx, 1300);
+
+  return canvas;
+}
+
+function doShareCard() {
+  if (!state.currentReport) return;
+  // sessionScore/jd 取落库记录（radar 与领域的真源随场存）；存失败的场（无 id / 记录
+  // 已被清理）退 meta.totalScore 出无雷达卡，分享功能不整个哑掉
+  const rec = state.currentSessionId != null
+    ? (store.listSessions() ?? []).find((s) => s?.id === state.currentSessionId)
+    : null;
+  const model = buildShareCardModel({
+    meta: state.currentMeta ?? {},
+    sessionScore: rec?.sessionScore,
+    jd: rec?.jd,
+  });
+  const canvas = drawShareCard(model);
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      toast('分享图生成失败，请重试');
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = model.filename;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`已下载 ${model.filename}`);
+  }, 'image/png');
+}
+
 // ---------------- ④ 台账页 ----------------
 
 function openSavedReport(rec) {
@@ -840,7 +1101,13 @@ function renderLedger() {
     const metaSpan = document.createElement('span');
     metaSpan.className = 'm-meta';
     metaSpan.textContent = `最近 ${m.score.total} 分 · 答过 ${m.attempts} 次`;
-    li.append(titleSpan, metaSpan);
+    // V2.3 单题直达：只有这颗按钮可点（行内其余区域保持不可点，防误触）
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'btn gold m-retry';
+    retryBtn.textContent = '重练这题';
+    retryBtn.addEventListener('click', () => startSingleDrill(m));
+    li.append(titleSpan, metaSpan, retryBtn);
     mistakeList.append(li);
   }
 
@@ -1283,11 +1550,11 @@ function doExportBackup() {
   toast(`已导出 ${filename}——收好，这是你数据的唯一副本`);
 }
 
-// replace 模式的清面回调（注入给 ui-core.importBackup）：只删 storage 四面键，
-// 不碰 guomian:onboarded 等 UI 偏好键。键名同 src/storage 的 KEYS（契约 §9 四面），
-// storage 改键名须同步这里。
+// replace 模式的清面回调（注入给 ui-core.importBackup）：只删 storage 数据面键
+// （V2.3 起五面，含 custom），不碰 guomian:onboarded 等 UI 偏好键。
+// 键名同 src/storage 的 KEYS（契约 §9），storage 改键名须同步这里。
 function wipeStoreFaces() {
-  for (const face of ['profiles', 'sessions', 'entitlements', 'ledger']) {
+  for (const face of ['profiles', 'sessions', 'entitlements', 'ledger', 'custom']) {
     localStorage.removeItem(`guomian:${face}`);
   }
 }
@@ -1306,7 +1573,7 @@ function openImportOverlay(data, counts) {
     ? `（超出上限 ${MAX_SESSIONS} 场，最早的记录将被自动清理）`
     : '';
   $('#import-summary').textContent =
-    `将导入 ${counts.sessions} 场面试记录${overflow}、${counts.profiles} 份档案、${counts.ledger} 条台账。`
+    `将导入 ${counts.sessions} 场面试记录${overflow}、${counts.profiles} 份档案、${counts.ledger} 条台账、${counts.custom} 道自定义题。`
     + '合并会保留现有记录（同一场不重复）；覆盖会先清空本机现有数据。';
   resetReplaceButton();
   $('#import-overlay').hidden = false;
@@ -1336,7 +1603,7 @@ function runImport(mode) {
   closeImportOverlay();
   renderLedger(); // 台账视图立即反映导入结果
   // P2-3：merge 可能触发 MAX_SESSIONS 修剪，报「实际写入数」会骗人——一并报最终存量
-  toast(`导入完成：新增 ${imported.sessions} 场记录、${imported.profiles} 份档案、${imported.ledger} 条台账`
+  toast(`导入完成：新增 ${imported.sessions} 场记录、${imported.profiles} 份档案、${imported.ledger} 条台账、${imported.custom} 道自定义题`
     + `，本机现有 ${store.listSessions().length} 场`
     + (imported.entitlements ? '，权益已更新' : ''));
 }
@@ -1565,6 +1832,12 @@ function init() {
   $('#btn-copy-md').addEventListener('click', copyMarkdown);
   $('#btn-download-md').addEventListener('click', downloadMarkdown);
   $('#btn-share').addEventListener('click', shareReport);
+  // 分享图按钮渐进增强：canvas 可用才放开（不可用保持 HTML 里的 hidden 零痕迹）
+  if (canvasSupported()) {
+    const shareCardBtn = $('#btn-share-card');
+    shareCardBtn.hidden = false;
+    shareCardBtn.addEventListener('click', doShareCard);
+  }
   for (const tab of document.querySelectorAll('.tabbar .tab')) {
     tab.addEventListener('click', () => showView(tab.dataset.view));
   }
@@ -1575,6 +1848,7 @@ function init() {
   initInstallCard();
   initBackup();
   initVoiceInput();
+  initCustomQuestions();
   $('#disclosure-bar').textContent = `${DISCLOSURE}。`;
   showView('prepare');
   initOnboarding(); // 放在 showView 之后：首访聚焦引导按钮不被视图切换打断
