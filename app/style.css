@@ -716,6 +716,94 @@ textarea:focus-visible, input:focus-visible {
   font-style: normal;
 }
 
+/* ---------- 隐私浮层：政策全文展开区 ---------- */
+
+.privacy-full {
+  margin: 10px 0 12px;
+  padding: 12px 14px;
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--navy-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.privacy-full p { margin: 0 0 8px; }
+
+.privacy-full .policy-heading {
+  font-weight: 600;
+  color: var(--gold);
+  margin-top: 12px;
+}
+
+/* ---------- iOS 添加到主屏幕步骤浮层（图形纯 CSS） ---------- */
+
+.ios-steps {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.ios-steps li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+}
+
+.ios-steps li + li { border-top: 1px solid var(--line); }
+
+.ios-steps p { margin: 0; font-size: 14px; line-height: 1.6; }
+
+.ios-step-icon {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--gold);
+  border-radius: 10px;
+}
+
+/* 分享图标：盒内竖杆＋上箭头（两伪元素拼装） */
+.ios-step-icon.share::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 9px;
+  width: 2px;
+  height: 16px;
+  background: var(--gold);
+  transform: translateX(-50%);
+}
+
+.ios-step-icon.share::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  width: 9px;
+  height: 9px;
+  border-left: 2px solid var(--gold);
+  border-top: 2px solid var(--gold);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* 「添加」图标：盒内居中加号 */
+.ios-step-icon.add::before {
+  content: '+';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold);
+  font-size: 24px;
+  line-height: 1;
+}
+
 /* ---------- 首访三步引导浮层 ---------- */
 
 .onboarding-steps {

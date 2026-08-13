@@ -815,12 +815,58 @@ function closePrivacyOverlay() {
 function initPrivacyOverlay() {
   $('#btn-privacy').addEventListener('click', openPrivacyOverlay);
   $('#btn-privacy-close').addEventListener('click', closePrivacyOverlay);
+  $('#btn-privacy-full').addEventListener('click', loadPrivacyFullText);
   $('#privacy-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closePrivacyOverlay(); // 只点背景关，点卡片不关
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closePrivacyOverlay();
   });
+}
+
+// 政策全文按行渲染为纯文本段落：# 开头的标题行加粗、空行跳过，零 markdown 渲染器、
+// 全部 textContent（注入纪律不因自家文档破例）
+function renderPolicyText(box, text) {
+  box.textContent = '';
+  for (const raw of String(text).split('\n')) {
+    const line = raw.replace(/\r$/, '').trim();
+    if (!line) continue;
+    const p = document.createElement('p');
+    if (line.startsWith('#')) {
+      p.className = 'policy-heading';
+      p.textContent = line.replace(/^#+\s*/, '');
+    } else {
+      p.textContent = line;
+    }
+    box.append(p);
+  }
+}
+
+// 隐私政策全文入应用（V1.9，收 V1.7 挂账「浮层引用的全文线上不可达」）：
+// 这是 app 层唯一的网络调用点——取本站静态托管的政策文本自身，同源 GET、
+// 不携带任何业务数据；已在 test/privacy.test.mjs 的 FETCH_WHITELIST 登记 1 处，
+// 政策依据见 docs/隐私政策.md §5 末行声明。失败（本地 dev 未放行 /docs、断网
+// 且无缓存）时给兜底行并允许重试，不炸不空白。
+async function loadPrivacyFullText() {
+  const btn = $('#btn-privacy-full');
+  const box = $('#privacy-full');
+  btn.disabled = true;
+  box.hidden = false;
+  box.textContent = '加载中…';
+  try {
+    const res = await fetch('/docs/隐私政策.md');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    renderPolicyText(box, await res.text());
+    btn.hidden = true; // 已展开，按钮退场
+  } catch {
+    box.textContent = '';
+    const fallback = document.createElement('p');
+    fallback.className = 'hint';
+    fallback.textContent = '当前环境未能加载完整文本（可能离线或本环境未托管该文件）。'
+      + '全文暂时加载失败，可稍后重试；上方要点即政策的忠实摘录，六条承诺不因加载失败而打折。';
+    box.append(fallback);
+    btn.disabled = false; // 网络恢复后可重试
+  }
 }
 
 // ---------------- ⑤ 锦囊页（契约 §14 V1.8） ----------------
@@ -952,6 +998,83 @@ function initCoach() {
   $('#coach-link-row').addEventListener('click', openCoachReco);
 }
 
+// ---------------- PWA 安装引导（V1.9，判端事实见 docs/上架路线预研.md §1） ----------------
+// 三分支：已装（standalone）不出卡；iOS 无 beforeinstallprompt 只能图文引导手动
+// 「添加到主屏幕」；Chromium 系捕获 beforeinstallprompt 后由按钮触发原生安装弹窗；
+// 其余环境（国产安卓默认浏览器/桌面 Firefox 等）按钮给通用换浏览器说明。
+
+let deferredInstallPrompt = null; // beforeinstallprompt 事件暂存，只由用户点按钮时消费
+
+function isStandaloneDisplay() {
+  return window.matchMedia?.('(display-mode: standalone)')?.matches === true
+    || window.navigator.standalone === true; // 后者是 iOS Safari 私有属性
+}
+
+function isIOSBrowser() {
+  const ua = navigator.userAgent;
+  // iPadOS 13+ 桌面态 UA 伪装 Macintosh，用触点数辨认
+  return /iPhone|iPad|iPod/.test(ua)
+    || (ua.includes('Macintosh') && navigator.maxTouchPoints > 1);
+}
+
+function openIosInstallOverlay() {
+  $('#ios-install-overlay').hidden = false;
+  $('#btn-ios-install-close').focus();
+}
+
+function closeIosInstallOverlay() {
+  const overlay = $('#ios-install-overlay');
+  if (overlay.hidden) return;
+  overlay.hidden = true;
+  $('#btn-install').focus(); // 焦点归还触发按钮
+}
+
+function initInstallCard() {
+  if (isStandaloneDisplay()) return; // 已安装：卡片保持 hidden
+
+  // 尽早挂监听：Chromium 系满足可安装条件即发事件，拦下暂存、不打断用户
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+  });
+  window.addEventListener('appinstalled', () => {
+    $('#install-card').hidden = true;
+    toast('安装完成，之后可从桌面图标直接打开');
+  });
+
+  const card = $('#install-card');
+  const desc = $('#install-desc');
+  const btn = $('#btn-install');
+  card.hidden = false;
+
+  if (isIOSBrowser()) {
+    desc.textContent = '把「过面」添加到主屏幕：全屏打开、离线也能练，体验和 App 一样。';
+    btn.textContent = '查看添加步骤';
+    btn.addEventListener('click', openIosInstallOverlay);
+    $('#btn-ios-install-close').addEventListener('click', closeIosInstallOverlay);
+    $('#ios-install-overlay').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeIosInstallOverlay();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeIosInstallOverlay();
+    });
+    return;
+  }
+
+  desc.textContent = '把「过面」装成独立应用：离线可用、桌面直达（Chrome、Edge 等浏览器支持）。';
+  btn.addEventListener('click', async () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt(); // 原生安装弹窗
+      const choice = await deferredInstallPrompt.userChoice.catch(() => null);
+      deferredInstallPrompt = null;
+      if (choice?.outcome === 'accepted') $('#install-card').hidden = true;
+    } else {
+      // 通用说明分支：当前浏览器没发 beforeinstallprompt（国产默认浏览器/不支持环境）
+      toast('浏览器暂未提供安装入口（可能已安装过、或刚拒绝过安装提示）——可在浏览器菜单里找「安装应用 / 添加到主屏幕」，或稍后再试');
+    }
+  });
+}
+
 // ---------------- 公测徽标与说明浮层（契约 §10 V1.7） ----------------
 // 徽标仅 BETA_FREE 时显示；浮层复用 modal 体系（焦点陷阱由 initModalFocusTrap 统一覆盖），
 // 关闭后焦点归还徽标按钮（既有纪律）。
@@ -1064,6 +1187,7 @@ function init() {
   initPrivacyOverlay();
   initBetaBadge();
   initCoach();
+  initInstallCard();
   $('#disclosure-bar').textContent = `${DISCLOSURE}。`;
   showView('prepare');
   initOnboarding(); // 放在 showView 之后：首访聚焦引导按钮不被视图切换打断

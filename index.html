@@ -106,6 +106,11 @@
     <section id="view-ledger" class="view" hidden>
       <h2 class="view-title">练习台账</h2>
       <div id="entitlement-card" class="card"></div>
+      <div id="install-card" class="card" hidden>
+        <h3 class="card-title">安装到桌面</h3>
+        <p id="install-desc" class="hint"></p>
+        <button id="btn-install" class="btn gold block">安装到桌面</button>
+      </div>
       <div class="card">
         <h3 class="card-title">分数趋势</h3>
         <div id="trend-chart" class="trend-chart"></div>
@@ -173,10 +178,29 @@
               <polygon points="20,11 29,17.5 26,28 14,28 11,17.5" fill="rgba(201,162,39,0.28)" stroke="#c9a227" stroke-width="2" stroke-linejoin="round"/>
             </svg>
           </span>
-          <p>收报告：逐题诊断＋五维评分＋7 天冲刺计划。</p>
+          <p>收报告：逐题诊断＋五维评分＋7 天冲刺计划。面试锦囊页还有 60+ 条实战技巧。</p>
         </li>
       </ol>
       <button id="btn-onboarding-start" class="btn primary block">开始体验</button>
+    </div>
+  </div>
+
+  <!-- iOS 添加到主屏幕步骤浮层（图形纯 CSS，无图片资产） -->
+  <div id="ios-install-overlay" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ios-install-title">
+      <h3 id="ios-install-title">添加到主屏幕</h3>
+      <ol class="ios-steps">
+        <li>
+          <span class="ios-step-icon share" aria-hidden="true"></span>
+          <p>点浏览器工具栏的「分享」按钮（方框加向上箭头的图标）。</p>
+        </li>
+        <li>
+          <span class="ios-step-icon add" aria-hidden="true"></span>
+          <p>在菜单里选「添加到主屏幕」，确认后桌面就有「过面」图标了。</p>
+        </li>
+      </ol>
+      <p class="hint">iOS 16.3 及更早仅 Safari 支持；16.4 起 Chrome、Edge 等也能从分享菜单安装。</p>
+      <button id="btn-ios-install-close" class="btn primary block">知道了</button>
     </div>
   </div>
 
@@ -204,7 +228,9 @@
         <li>清除浏览器站点数据即删除全部记录——我们无从恢复，也无从知晓。</li>
         <li>当前版本无 Cookie、无埋点、无第三方统计。</li>
       </ul>
-      <p class="hint">完整文本（逐条带代码背书）见项目 docs/隐私政策.md。</p>
+      <p class="hint">完整文本（逐条带代码背书）可在下方直接展开查看。</p>
+      <button id="btn-privacy-full" class="btn ghost block">查看完整文本</button>
+      <div id="privacy-full" class="privacy-full" hidden></div>
       <button id="btn-privacy-close" class="btn primary block">知道了</button>
     </div>
   </div>
