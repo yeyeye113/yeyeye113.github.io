@@ -31,6 +31,14 @@
       <div class="field-label">手头没有现成 JD？点一个示例，10 秒开一场</div>
       <div id="sample-options" class="pill-group" role="group" aria-label="一键填充示例数据"></div>
 
+      <!-- 弱项重练入口（V2.1）：有历史低分题才显示，数据来自 src/drill collectMistakes -->
+      <div id="drill-card" class="card drill-card" hidden>
+        <h3 class="card-title">弱项重练</h3>
+        <p id="drill-lead" class="drill-lead"></p>
+        <p id="drill-preview" class="hint"></p>
+        <button id="btn-drill-start" class="btn gold block">开练（最多 5 题）</button>
+      </div>
+
       <label class="field-label" for="jd-input">目标岗位 JD</label>
       <textarea id="jd-input" rows="6"
         placeholder="贴目标岗位 JD，或点上方示例试一场（岗位名、职责、任职要求都要）。内容只留在你的浏览器里，不会上传。"></textarea>
@@ -76,8 +84,18 @@
         </div>
         <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
         <div id="chat-log" class="chat-log" aria-live="polite"></div>
+        <p id="voice-hint" class="hint voice-hint" hidden>聆听中，说完后再点麦克风结束；识别出的文字可修改后再提交。</p>
         <div class="composer">
           <textarea id="answer-input" rows="3" placeholder="像真实面试一样，把回答完整说出来…"></textarea>
+          <!-- 语音作答（V2.1 渐进增强）：浏览器不支持 SpeechRecognition 时保持 hidden，零痕迹 -->
+          <button id="btn-voice" class="btn ghost voice-btn" hidden aria-pressed="false" aria-label="语音作答（点击开始聆听）">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+              <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+              <line x1="12" y1="18" x2="12" y2="22"></line>
+              <line x1="8" y1="22" x2="16" y2="22"></line>
+            </svg>
+          </button>
           <button id="btn-submit" class="btn primary">提交回答</button>
         </div>
       </div>
@@ -110,6 +128,12 @@
         <h3 class="card-title">安装到桌面</h3>
         <p id="install-desc" class="hint"></p>
         <button id="btn-install" class="btn gold block">安装到桌面</button>
+      </div>
+      <!-- 错题本（V2.1）：历史低分题聚合展示；空态整块隐藏 -->
+      <div id="mistake-card" class="card" hidden>
+        <h3 class="card-title">错题本</h3>
+        <p class="hint">60 分以下的题自动聚在这里；去准备页点「弱项重练」逐一攻克。</p>
+        <ul id="mistake-list" class="mistake-list"></ul>
       </div>
       <div class="card">
         <h3 class="card-title">数据备份</h3>
@@ -237,6 +261,16 @@
     </div>
   </div>
 
+  <!-- 语音作答首次使用告知（确认后记 guomian:voice-consent，之后不再弹；数据流事实见 docs/隐私政策.md §7） -->
+  <div id="voice-consent-overlay" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="voice-consent-title">
+      <h3 id="voice-consent-title">语音作答说明</h3>
+      <p class="voice-consent-text">语音识别由你的浏览器提供，音频可能经浏览器厂商的语音服务处理；本产品自身不录制、不上传、不存储任何音频。识别出的文字会填进作答框，和手打文字一样只存你本机，可修改后再提交。</p>
+      <button id="btn-voice-consent-ok" class="btn primary block">知道了，开始</button>
+      <button id="btn-voice-consent-cancel" class="btn ghost block">取消</button>
+    </div>
+  </div>
+
   <!-- 隐私承诺浮层（应用内要点摘录，完整文本在 docs/隐私政策.md） -->
   <div id="privacy-overlay" class="modal-overlay" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
@@ -247,6 +281,7 @@
         <li>可选 AI 增强：问答内容只发往你自己填的第三方端点；apiKey 只存内存，关页即失。</li>
         <li>清除浏览器站点数据即删除全部记录——我们无从恢复，也无从知晓。</li>
         <li>当前版本无 Cookie、无埋点、无第三方统计。</li>
+        <li>可选语音作答：音频由你的浏览器厂商的语音服务识别，本产品不录制、不上传、不存储任何音频。</li>
       </ul>
       <p class="hint">完整文本（逐条带代码背书）可在下方直接展开查看。</p>
       <button id="btn-privacy-full" class="btn ghost block">查看完整文本</button>

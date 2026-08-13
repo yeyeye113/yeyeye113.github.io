@@ -264,6 +264,33 @@ textarea:focus-visible, input:focus-visible {
 
 .btn.block { display: block; width: 100%; margin-top: 14px; }
 
+/* 弱项重练入口卡（准备页）：金边点睛，与示例 pill 区呼应 */
+.drill-card { border-left: 3px solid var(--gold); }
+
+.drill-lead { font-size: 15px; font-weight: 600; color: var(--gold); margin: 8px 0 2px; }
+
+/* 报告标题旁重练场徽标：复用 abandon-badge 体系的金色变体（标注而非警示） */
+.abandon-badge.drill-badge {
+  color: var(--gold);
+  border-color: var(--gold);
+  background: rgba(201, 162, 39, 0.1);
+}
+
+/* 错题本列表（台账页） */
+.mistake-list { list-style: none; margin: 10px 0 0; padding: 0; }
+
+.mistake-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.mistake-item .m-title { font-size: 14px; color: var(--text); line-height: 1.5; }
+
+.mistake-item .m-meta { font-size: 12px; color: var(--text-dim); }
+
 /* 数据备份卡：导出/导入并排两钮，窄屏各占一半 */
 .backup-row { display: flex; gap: 10px; margin-top: 10px; }
 
@@ -392,6 +419,36 @@ textarea:focus-visible, input:focus-visible {
   gap: 10px;
   margin-top: 14px;
 }
+
+/* 语音作答按钮（渐进增强）：触控 ≥48px；聆听态红色脉冲，动画尊重 prefers-reduced-motion */
+.voice-btn {
+  min-width: 48px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.voice-btn.listening {
+  border-color: var(--danger);
+  color: var(--danger);
+  animation: voice-pulse 1.4s ease-out infinite;
+}
+
+@keyframes voice-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(208, 106, 90, 0.45); }
+  70% { box-shadow: 0 0 0 10px rgba(208, 106, 90, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(208, 106, 90, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-btn.listening { animation: none; box-shadow: 0 0 0 3px rgba(208, 106, 90, 0.35); }
+}
+
+.voice-hint { color: var(--danger); margin: 10px 0 0; }
+
+.voice-consent-text { font-size: 14px; color: var(--text); line-height: 1.7; margin: 10px 0 4px; }
 
 /* ---------- 报告页 ---------- */
 

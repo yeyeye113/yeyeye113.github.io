@@ -17,10 +17,36 @@ export const MODE_OPTIONS = [
 
 export const ROUNDS_OPTIONS = [5, 8, 12];
 
+// 不进准备页 pill 组、但会出现在台账行/报告标题的扩展模式标签（V2.1）：
+// drill 由「弱项重练」入口触发生成（契约 §15 buildDrillPlan），不是用户可选模式，
+// 混进 MODE_OPTIONS 会让准备页多出一个没有出题语义的 pill。
+const EXTRA_MODE_LABELS = { drill: '弱项重练' };
+
 // modeLabel(mode) -> string：契约 mode 值转中文标签；未知值原样字符串化（不抛）
 export function modeLabel(mode) {
   const found = MODE_OPTIONS.find((m) => m.value === mode);
-  return found ? found.label : String(mode ?? '未知');
+  if (found) return found.label;
+  if (typeof mode === 'string' && EXTRA_MODE_LABELS[mode]) return EXTRA_MODE_LABELS[mode];
+  return String(mode ?? '未知');
+}
+
+// buildDrillSummary(mistakes, { max=5, previewLen=24 }) -> { total, pick, lead, preview } | null
+// 重练入口卡文案的纯数据构建（V2.1）：mistakes 为 collectMistakes 产出（已按分升序，
+// 首条即最弱）；空/坏输入返回 null，调用方据此隐藏入口卡。pick 封顶 max 与
+// buildDrillPlan 的 rounds 同源口径（app.js 两处传同一个值）。
+export function buildDrillSummary(mistakes, { max = 5, previewLen = 24 } = {}) {
+  const list = Array.isArray(mistakes)
+    ? mistakes.filter((m) => m && m.question && typeof m.question.text === 'string')
+    : [];
+  if (list.length === 0) return null;
+  const weakestText = list[0].question.text.trim();
+  const clipped = weakestText.length > previewLen ? `${weakestText.slice(0, previewLen)}…` : weakestText;
+  return {
+    total: list.length,
+    pick: Math.min(list.length, max),
+    lead: `你有 ${list.length} 道低分题待攻克`,
+    preview: `最弱一题：${clipped}`,
+  };
 }
 
 // 本地时区日期 'YYYY-MM-DD'（内部单一真源，P2-3 收口）：

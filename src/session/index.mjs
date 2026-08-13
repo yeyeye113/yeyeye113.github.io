@@ -46,9 +46,10 @@ export function createSession({ plan, scorer, llm = null, persona = null, now = 
 
   let state = 'ready';
   let cursor = 0;
-  let current = null;        // 当前题（Question）
-  let currentAnswer = null;  // { questionId, text, followupText? }
-  let firstScore = null;     // 首答得分（追问重评时对比用）
+  let current = null;           // 当前题（Question）
+  let currentAnswer = null;     // { questionId, text, followupText?, durationMs }
+  let firstScore = null;        // 首答得分（追问重评时对比用）
+  let questionStartedAt = null; // 当前题问出时刻（V2.1 计时起点）
   const answers = [];
   const scores = [];
   const startedAt = now();
@@ -117,12 +118,17 @@ export function createSession({ plan, scorer, llm = null, persona = null, now = 
     }
   }
 
+  // 定稿收录。durationMs（V2.1）：该题从问出（nextQuestion 返回时刻）到定稿的毫秒数，
+  // 追问期整段自然并入（一题一个总时长，不拆首答/追答）；用注入的 now() 计。
+  // 真实时钟下同毫秒内定稿会得 0，钳到最小 1 保证正整数；非整数时钟取整。
   function commit(score) {
+    currentAnswer.durationMs = Math.max(1, Math.round(now() - questionStartedAt));
     answers.push(currentAnswer);
     scores.push(score);
     current = null;
     currentAnswer = null;
     firstScore = null;
+    questionStartedAt = null;
     state = 'ready';
   }
 
@@ -136,6 +142,7 @@ export function createSession({ plan, scorer, llm = null, persona = null, now = 
       if (cursor >= plan.questions.length) return null; // null = 没有下一题，该 finish 了
       current = plan.questions[cursor];
       cursor += 1;
+      questionStartedAt = now(); // V2.1 计时起点：该题问出时刻
       state = 'awaiting_answer';
       return current;
     },
@@ -189,6 +196,7 @@ export function createSession({ plan, scorer, llm = null, persona = null, now = 
       current = null;
       currentAnswer = null;
       firstScore = null;
+      questionStartedAt = null; // 挂题被丢弃，不产生 answers 元素也不计时
       state = 'finished';
       return {
         plan,

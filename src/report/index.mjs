@@ -19,6 +19,18 @@ const DIM_LABELS = {
   clarity: '表达清晰度',
 };
 
+// 节奏分析阈值（V2.1）。口径来源如实标注：45 秒（草率线）、6 分钟（拖沓线）、
+// 「面试官单题耐心约 2-3 分钟」与 45s-4min 健康带均为常见面试实操经验值，无学术出处；
+// 「最长/最短 >5 倍判节奏不稳」为本产品自定的离散度经验判据。阈值只许收紧，调松判红。
+const PACE = {
+  RUSHED_MS: 45_000, // 单题用时低于此值且得分 < RUSHED_SCORE → 草率带
+  RUSHED_SCORE: 60,
+  DRAG_MS: 360_000, // 单题用时超过 6 分钟 → 拖沓带
+  HEALTHY_MIN_MS: 45_000, // 健康带：45 秒 - 4 分钟
+  HEALTHY_MAX_MS: 240_000,
+  SPREAD_RATIO: 5, // 最长/最短用时比超过此值 → 节奏不稳
+};
+
 // 分数带：高 ≥85 / 中高 70-84 / 中 55-69 / 低 <55
 function band(score) {
   if (score >= 85) return '高';
@@ -351,6 +363,24 @@ const SPRINT = [
   ],
 ];
 
+// 节奏评语模板（V2.1，{list} 为题号占位符）：4 带 × 2 = 8
+const PACE_RUSHED = [
+  '{list}在 45 秒内就交了卷且得分不足 60——答得快不等于答得好。下次听完题先默数 3 秒，把 STAR 骨架在脑子里搭好再开口。',
+  '{list}属于「秒答低分」：用时不足 45 秒、得分低于 60。面试不是抢答赛，先默数 3 秒组织结构，宁可开口慢一拍。',
+];
+const PACE_DRAG = [
+  '{list}用时超过 6 分钟——真实面试官对单题的耐心通常只有 2-3 分钟，超时会被礼貌打断。练习把答案收敛到三段以内。',
+  '{list}拖过了 6 分钟：内容再好，超出面试官 2-3 分钟的耐心带就是减分。给每段经历备一个 90 秒精简版，先讲完主线再等追问。',
+];
+const PACE_UNSTABLE = [
+  '本场最长用时超过最短的 5 倍，节奏不稳：面试官会怀疑你只对熟悉的题做了准备。把不熟的题也练到能稳定输出 1-2 分钟。',
+  '题与题之间用时差超过 5 倍，节奏不稳给人「押题式准备」的观感。给每类题型都备一个最小可讲版本，拉平输出下限。',
+];
+const PACE_HEALTHY = [
+  '全场每题用时都落在 45 秒到 4 分钟之间，节奏健康：既没有抢答也没有拖堂，这个时间感请保持到真实面试。',
+  '答题节奏健康——单题用时全部处于 45 秒至 4 分钟的舒适带内。时间掌控本身就是面试成熟度的信号，继续保持。',
+];
+
 // 分享文案开头模板：4 带 × 1 = 4
 const SHARE_OPENERS = {
   高: '发挥相当扎实，叙事结构和数据支撑都在线，接下来重点打磨追问应变。',
@@ -372,6 +402,10 @@ export const TEMPLATE_POOL = [
   ...Object.values(SKILL_PATHS),
   ...SKILL_PATH_GENERIC,
   ...SPRINT.flat(),
+  ...PACE_RUSHED,
+  ...PACE_DRAG,
+  ...PACE_UNSTABLE,
+  ...PACE_HEALTHY,
   ...Object.values(SHARE_OPENERS),
 ];
 
@@ -388,6 +422,14 @@ function pick(pool, key) {
 }
 
 // ---------------- 报告组装 ----------------
+
+// 用时渲染：<60 秒不带「分」（59s→「59 秒」），≥60 秒为「X 分 X 秒」（61s→「1 分 1 秒」）
+function fmtDuration(ms) {
+  const totalSec = Math.round(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m > 0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
+}
 
 function quoteOf(text, max = 100) {
   const t = String(text ?? '').trim();
@@ -432,7 +474,8 @@ function buildQuestionSection(question, answer, score, index) {
     `题目（${question.type}）：${question.text}`,
     `考察意图：${question.intent}`,
     `【你的回答】「${quoteOf(answer?.text)}」${answer?.followupText ? `（追问补答：「${quoteOf(answer.followupText, 60)}」）` : ''}`,
-    `【得分】${total}/100（${dimBrief}）`,
+    // durationMs 为契约 §5 V2.1 纯增字段：缺失（旧数据）时不渲染用时，向后兼容
+    `【得分】${total}/100${Number.isFinite(answer?.durationMs) && answer.durationMs > 0 ? ` · 用时 ${fmtDuration(answer.durationMs)}` : ''}（${dimBrief}）`,
     `【主要问题】\n${problems}`,
     `【怎么改】\n${fixes}`,
     `【参考回答框架】${framework}${mustCover}`,
@@ -481,13 +524,45 @@ export function buildReport({ result, jd, resume, match }) {
     locked: false,
   });
 
-  // ② 五维雷达诊断（locked）
+  // ② 五维雷达诊断（locked）＋节尾答题节奏分析（V2.1）
+  // 落位说明：节奏是「五维之外的第六个全场观察轴」，与雷达同属诊断细读层，放 ② 节尾内容流最顺，
+  // 且与其余诊断一致留在付费墙内（① 免费节只做总览）。durationMs 全缺失（旧数据）时整段不出现。
+  const durationsInfo = answers
+    .map((a, i) => ({ i, ms: a?.durationMs, total: scores[i]?.total ?? 0 }))
+    .filter((d) => Number.isFinite(d.ms) && d.ms > 0);
+  const paceLines = [];
+  if (durationsInfo.length > 0) {
+    const msList = durationsInfo.map((d) => d.ms);
+    const minMs = Math.min(...msList);
+    const maxMs = Math.max(...msList);
+    const avgMs = msList.reduce((a, b) => a + b, 0) / msList.length;
+    const qList = (items) => `第${items.map((d) => d.i + 1).join('、')}题`;
+    paceLines.push('答题节奏（按每题实际用时，确定性规则判读）：');
+    paceLines.push(`- 平均每题 ${fmtDuration(avgMs)}，最快 ${fmtDuration(minMs)}，最慢 ${fmtDuration(maxMs)}。`);
+    const rushed = durationsInfo.filter((d) => d.ms < PACE.RUSHED_MS && d.total < PACE.RUSHED_SCORE);
+    if (rushed.length > 0) {
+      paceLines.push(`- ${pick(PACE_RUSHED, `pace:rushed:${rushed.map((d) => d.i).join(',')}`).replaceAll('{list}', qList(rushed))}`);
+    }
+    const drag = durationsInfo.filter((d) => d.ms > PACE.DRAG_MS);
+    if (drag.length > 0) {
+      paceLines.push(`- ${pick(PACE_DRAG, `pace:drag:${drag.map((d) => d.i).join(',')}`).replaceAll('{list}', qList(drag))}`);
+    }
+    const unstable = minMs > 0 && maxMs / minMs > PACE.SPREAD_RATIO;
+    if (unstable) {
+      paceLines.push(`- ${pick(PACE_UNSTABLE, `pace:unstable:${Math.round(maxMs / minMs)}`)}`);
+    }
+    const allHealthy = durationsInfo.every((d) => d.ms >= PACE.HEALTHY_MIN_MS && d.ms <= PACE.HEALTHY_MAX_MS);
+    if (rushed.length === 0 && drag.length === 0 && !unstable && allHealthy) {
+      paceLines.push(`- ${pick(PACE_HEALTHY, `pace:healthy:${Math.round(avgMs / 1000)}`)}`);
+    }
+  }
   sections.push({
     heading: '② 五维雷达诊断',
     body: [
       '五个维度按契约权重加权（结构化 25% / 相关性 25% / 深度 20% / 量化 15% / 清晰度 15%）：',
       ...DIMS.map((d) => dimLine(ss.radar ?? {}, d)),
       `读法提示：优先修最低分维度——同样一小时练习，花在「${weakestLabels}」上的分数回报最高。`,
+      ...paceLines,
     ].join('\n'),
     locked: true,
   });

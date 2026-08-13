@@ -20,6 +20,8 @@ import { BETA_FREE } from '/src/config/index.mjs';
 import { TIPS, listCategories, searchTips, getTipsByCategory, recommendTips } from '/src/coach/index.mjs';
 // 示例数据（V1.4 一键填示例）：机检在 test/samples.test.mjs
 import { SAMPLES } from '/src/samples/index.mjs';
+// 错题本与弱项重练（契约 §15 V2.1）：低分题聚合＋一键组重练场
+import { collectMistakes, buildDrillPlan } from '/src/drill/index.mjs';
 // 接缝层纯逻辑（契约 §13，V1.3 外移）：机检在 test/ui-core.test.mjs
 import {
   MODE_OPTIONS,
@@ -38,6 +40,7 @@ import {
   exportBackup,
   validateBackup,
   importBackup,
+  buildDrillSummary,
 } from '/src/ui-core/index.mjs';
 
 // 趋势折线 SVG 拼接（坐标数学在 ui-core.buildTrendPoints，这里只出字符串）。
@@ -104,6 +107,7 @@ const state = {
   qIndex: 0,              // 当前第几题（1-based）
   finishing: false,
   currentReport: null,    // 报告页正在展示的 Report
+  currentMode: null,      // 本场原始 mode 值（'drill' 时报告标题加重练徽标，V2.1）
   currentMeta: null,      // 导出用元信息 { date, mode, totalScore }（src/export 消费）
   currentClosing: null,   // 面试官收尾台词（报告页顶部寄语行，V1.6 P3-3）
   currentWeakDims: null,  // 本场评分弱维度 key 数组（锦囊推荐联动，V1.8）
@@ -131,6 +135,7 @@ function showView(name) {
   for (const tab of document.querySelectorAll('.tabbar .tab')) {
     tab.classList.toggle('active', tab.dataset.view === name);
   }
+  if (name === 'prepare') renderDrillCard(); // 重练卡随历史数据变化（打完一场回来要刷新）
   if (name === 'ledger') renderLedger();
   if (name === 'report') renderReportView();
   if (name === 'coach') renderCoach();
@@ -245,6 +250,82 @@ function renderSamplePills() {
   }
 }
 
+// ---------------- ① 准备页：弱项重练（契约 §15，V2.1） ----------------
+
+// pick 数与出题数同源：buildDrillSummary({max}) 与 buildDrillPlan({rounds}) 都传它
+const DRILL_ROUNDS = 5;
+
+function renderDrillCard() {
+  const card = $('#drill-card');
+  const summary = buildDrillSummary(collectMistakes(store.listSessions()), { max: DRILL_ROUNDS });
+  if (!summary) {
+    card.hidden = true; // 没有低分题（或从没打过）：入口零痕迹
+    return;
+  }
+  $('#drill-lead').textContent = summary.lead;
+  $('#drill-preview').textContent = summary.preview;
+  $('#btn-drill-start').textContent = `开练（本次 ${summary.pick} 题）`;
+  card.hidden = false;
+}
+
+function startDrill() {
+  try {
+    doStartDrill();
+  } catch (err) {
+    toast(`重练开场失败：${err?.message ?? '未知错误'}，请重试`);
+  }
+}
+
+function doStartDrill() {
+  const sessions = store.listSessions();
+  const plan = buildDrillPlan(collectMistakes(sessions), { rounds: DRILL_ROUNDS, seed: Date.now() });
+  if (!plan) {
+    // 入口显示后错题被清（如覆盖导入）也可能走到这，不是异常路径
+    toast('错题本是空的——先打一场常规面试，低分题会自动聚到这里');
+    renderDrillCard();
+    return;
+  }
+
+  // jd 来源取舍：重练题自带 refPoints（评分主锚点），但 scoreAnswer({question,answer,jd})
+  // 契约需要 jd 供「JD 关键词覆盖率」一项。取最近一场落库记录随存的 jd 对象——与错题
+  // 出处同源概率最高；一条都取不到时退 parseJD('') 的合法空形状（只弱化 JD 覆盖率
+  // 一个评分信号，refPoints 覆盖/STAR/量化检测照常），不让重练因缺 jd 开不了场。
+  const latest = sortSessionsByTimeDesc(sessions).find((r) => r?.jd && typeof r.jd === 'object');
+  const jd = latest?.jd ?? parseJD('');
+
+  // 重练场固定「大厂严谨」persona（追问步步递进，最贴合逼你把低分题答透的场景）
+  const persona = getPersona({ style: '大厂严谨', domain: jd.domain });
+
+  // LLM 面板同常规场读取：重练也享受追问润色，留空即纯本地
+  const llmConfig = sanitizeLlmConfig({
+    baseURL: $('#llm-baseurl').value,
+    apiKey: $('#llm-apikey').value,
+    model: $('#llm-model').value,
+  });
+  const llm = llmConfig ? createLLM(llmConfig) : null;
+
+  const scorer = {
+    scoreAnswer: ({ question, answer }) => scoreAnswer({ question, answer, jd }),
+    scoreSession,
+  };
+
+  state.session = createSession({ plan, scorer, llm, persona });
+  state.plan = plan;
+  state.jd = jd;
+  state.resume = null; // 重练场不带简历上下文（题已定，匹配度一节无意义）
+  state.match = null;
+  state.persona = persona;
+  state.qIndex = 0;
+  state.finishing = false;
+
+  $('#chat-log').innerHTML = '';
+  $('#answer-input').value = '';
+  addBubble('interviewer', persona.openingLine);
+  askNextQuestion();
+  showView('interview');
+  toast(`弱项重练开场：${plan.questions.length} 道历史低分题，这次把它们答透`);
+}
+
 // ---------------- ① 准备页：开始面试 ----------------
 
 function startInterview() {
@@ -327,6 +408,8 @@ function setComposerBusy(busy) {
   $('#btn-submit').disabled = busy;
   $('#btn-early-finish').disabled = busy;
   $('#answer-input').disabled = busy;
+  $('#btn-voice').disabled = busy;
+  if (busy) stopVoiceInput(); // 提交/评分期间不该继续往输入框里灌识别文本
 }
 
 async function submitCurrentAnswer() {
@@ -406,6 +489,7 @@ function concludeInterview({ early = false } = {}) {
   store.appendLedger(buildLedgerEntry({ result, mode: state.plan.mode, now: savedAt }));
 
   state.currentReport = report;
+  state.currentMode = state.plan.mode;
   state.currentMeta = buildReportMeta({ result: { ...result, savedAt }, mode: state.plan.mode });
   state.currentClosing = state.persona.closingLine;
   state.currentWeakDims = result.sessionScore?.weakest ?? null;
@@ -579,6 +663,13 @@ function renderReportView() {
     badge.textContent = badgeText;
     title.append(badge);
   }
+  // 重练场徽标（V2.1）：复用提前交卷徽标样式体系，金色变体区分「标注」与「警示」
+  if (state.currentMode === 'drill') {
+    const drillBadge = document.createElement('span');
+    drillBadge.className = 'abandon-badge drill-badge';
+    drillBadge.textContent = `${modeLabel('drill')}场`;
+    title.append(drillBadge);
+  }
   container.append(title);
 
   // 收尾台词呈现在报告页顶部（V1.6 P3-3）：面试页气泡加完立刻切页看不到，
@@ -692,6 +783,7 @@ function openSavedReport(rec) {
     return;
   }
   state.currentReport = rec.report;
+  state.currentMode = rec?.mode ?? null;
   state.currentMeta = buildReportMeta({ result: rec, mode: rec?.mode });
   state.currentClosing = typeof rec.closingLine === 'string' ? rec.closingLine : null;
   state.currentWeakDims = rec?.sessionScore?.weakest ?? null;
@@ -722,6 +814,27 @@ function renderLedger() {
     || '<p class="empty-inline">还没有五维数据（早期记录只存了总分），打一场新的就能看到你的能力雷达。</p>';
 
   const sessions = store.listSessions() ?? [];
+
+  // 错题本（V2.1）：低分题聚合列表（title＋最近得分＋答过次数）；空态整卡隐藏。
+  // 注意放在下方 sessions 空态 early return 之前——没有历史时错题卡也必须收起。
+  const mistakes = collectMistakes(sessions);
+  const mistakeCard = $('#mistake-card');
+  const mistakeList = $('#mistake-list');
+  mistakeList.innerHTML = '';
+  mistakeCard.hidden = mistakes.length === 0;
+  for (const m of mistakes) {
+    const li = document.createElement('li');
+    li.className = 'mistake-item';
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'm-title';
+    titleSpan.textContent = m.question.text;
+    const metaSpan = document.createElement('span');
+    metaSpan.className = 'm-meta';
+    metaSpan.textContent = `最近 ${m.score.total} 分 · 答过 ${m.attempts} 次`;
+    li.append(titleSpan, metaSpan);
+    mistakeList.append(li);
+  }
+
   const list = $('#history-list');
   list.innerHTML = '';
   if (sessions.length === 0) {
@@ -999,6 +1112,131 @@ function initCoach() {
     renderCoach();
   });
   $('#coach-link-row').addEventListener('click', openCoachReco);
+}
+
+// ---------------- 语音作答（V2.1，纯前端渐进增强，契约 §12 语音条款） ----------------
+// 语音只是输入法：识别文本进作答框、可编辑、提交链路不变。浏览器不支持则按钮保持
+// hidden 零痕迹。音频由浏览器内置识别服务处理（通常经浏览器厂商云端）——本产品代码
+// 不接触音频字节，只接收识别文本；数据流已在 docs/隐私政策.md §7 如实披露，
+// 首次使用先弹告知浮层，确认记 UI 偏好裸键 guomian:voice-consent（onboarded 同款先例，
+// 非业务数据不走 createStore 四面）。
+
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+const voice = {
+  rec: null,        // 当前识别实例（识别中非 null，防重复启动）
+  baseText: '',     // 开始聆听时输入框已有文本快照，识别结果拼在其后
+  finalText: '',    // 已定稿的识别文本累积
+  errored: false,   // onerror 后 onend 还会来一次，防 toast 双发
+};
+
+function voiceErrorMessage(code) {
+  if (code === 'not-allowed' || code === 'service-not-allowed') {
+    return '麦克风权限被拒绝——请在浏览器设置里允许本站使用麦克风后重试';
+  }
+  if (code === 'no-speech') return '没听到声音，已停止聆听；可以再点麦克风重试';
+  if (code === 'network') return '语音服务连接失败（浏览器的识别服务需要联网），已停止聆听';
+  return '语音识别出错，已停止聆听；可以继续手动输入';
+}
+
+function setVoiceUi(listening) {
+  const btn = $('#btn-voice');
+  btn.classList.toggle('listening', listening);
+  btn.setAttribute('aria-pressed', String(listening));
+  btn.setAttribute('aria-label', listening ? '聆听中，点击结束' : '语音作答（点击开始聆听）');
+  $('#voice-hint').hidden = !listening;
+}
+
+function stopVoiceInput() {
+  if (!voice.rec) return;
+  try { voice.rec.stop(); } catch { /* 已停的实例再 stop 不炸 */ }
+}
+
+function startVoiceInput() {
+  if (voice.rec) return; // 识别中禁再启
+  const input = $('#answer-input');
+  // 与已有手打文本拼接：快照现值，识别结果追加在尾部
+  voice.baseText = input.value;
+  if (voice.baseText && !/\s$/.test(voice.baseText)) voice.baseText += ' ';
+  voice.finalText = '';
+  voice.errored = false;
+
+  const rec = new SpeechRec();
+  rec.lang = 'zh-CN';
+  rec.continuous = true;
+  rec.interimResults = true;
+
+  rec.onresult = (event) => {
+    let finals = '';
+    let interim = '';
+    for (const result of event.results) {
+      if (result.isFinal) finals += result[0].transcript;
+      else interim += result[0].transcript;
+    }
+    voice.finalText = finals;
+    input.value = voice.baseText + voice.finalText + interim;
+    input.selectionStart = input.selectionEnd = input.value.length; // 光标尾部
+  };
+  rec.onerror = (event) => {
+    voice.errored = true;
+    toast(voiceErrorMessage(event?.error));
+  };
+  rec.onend = () => {
+    // 停止（用户手点 / 自然超时 / 出错）统一收口：丢弃残留 interim，只留定稿文本
+    input.value = voice.baseText + voice.finalText;
+    voice.rec = null;
+    setVoiceUi(false);
+    input.focus();
+  };
+
+  try {
+    rec.start();
+  } catch {
+    toast(voiceErrorMessage('start-failed'));
+    return;
+  }
+  voice.rec = rec;
+  setVoiceUi(true);
+}
+
+function closeVoiceConsent() {
+  const overlay = $('#voice-consent-overlay');
+  if (overlay.hidden) return;
+  overlay.hidden = true;
+  $('#btn-voice').focus(); // 焦点归还触发按钮
+}
+
+function initVoiceInput() {
+  if (!SpeechRec) return; // 不支持：按钮保持 hidden，纯文字路径零痕迹
+  const btn = $('#btn-voice');
+  btn.hidden = false;
+
+  btn.addEventListener('click', () => {
+    if (voice.rec) {
+      stopVoiceInput();
+      return;
+    }
+    if (localStorage.getItem('guomian:voice-consent') === '1') {
+      startVoiceInput();
+      return;
+    }
+    $('#voice-consent-overlay').hidden = false;
+    $('#btn-voice-consent-ok').focus();
+  });
+
+  $('#btn-voice-consent-ok').addEventListener('click', () => {
+    // 只有明确点「知道了，开始」才落盘同意标志；取消/Esc 不落盘，下次再问
+    localStorage.setItem('guomian:voice-consent', '1');
+    closeVoiceConsent();
+    startVoiceInput();
+  });
+  $('#btn-voice-consent-cancel').addEventListener('click', closeVoiceConsent);
+  $('#voice-consent-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeVoiceConsent(); // 只点背景关，点卡片不关
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeVoiceConsent();
+  });
 }
 
 // ---------------- 数据备份：导出 / 导入（V2.0，逻辑真源 ui-core 契约 §13） ----------------
@@ -1281,6 +1519,7 @@ function init() {
   renderSamplePills();
 
   $('#btn-start').addEventListener('click', startInterview);
+  $('#btn-drill-start').addEventListener('click', startDrill);
   $('#btn-submit').addEventListener('click', submitCurrentAnswer);
   $('#btn-early-finish').addEventListener('click', earlyFinish);
   $('#btn-copy-md').addEventListener('click', copyMarkdown);
@@ -1295,6 +1534,7 @@ function init() {
   initCoach();
   initInstallCard();
   initBackup();
+  initVoiceInput();
   $('#disclosure-bar').textContent = `${DISCLOSURE}。`;
   showView('prepare');
   initOnboarding(); // 放在 showView 之后：首访聚焦引导按钮不被视图切换打断
