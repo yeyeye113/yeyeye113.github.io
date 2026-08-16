@@ -269,6 +269,43 @@ textarea:focus-visible, input:focus-visible {
 
 .drill-lead { font-size: 15px; font-weight: 600; color: var(--gold); margin: 8px 0 2px; }
 
+/* 公考结构化入口卡（V2.8）：藏青左边线，与弱项重练金边区分；五维芯片 + 本题场题数 pill */
+.gongkao-card {
+  border-left: 3px solid #5b8fd4;
+  background: linear-gradient(180deg, rgba(91, 143, 212, 0.12), transparent 52%);
+}
+
+.gongkao-lead {
+  font-size: 15px;
+  font-weight: 600;
+  color: #8eb4e8;
+  margin: 8px 0 6px;
+}
+
+.gongkao-dims {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.gongkao-dim-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--surface-2);
+}
+
+.abandon-badge.gongkao-badge {
+  color: #8eb4e8;
+  border-color: #5b8fd4;
+  background: rgba(91, 143, 212, 0.12);
+}
+
 /* 报告标题旁重练场徽标：复用 abandon-badge 体系的金色变体（标注而非警示） */
 .abandon-badge.drill-badge {
   color: var(--gold);
@@ -352,6 +389,22 @@ textarea:focus-visible, input:focus-visible {
 .mistake-item .m-meta { font-size: 12px; color: var(--text-dim); }
 
 /* 数据备份卡：导出/导入并排两钮，窄屏各占一半 */
+/* 简历档案切换（V2.4 #6）：下拉与按钮同排，窄屏可换行；select 外观对齐输入框口径 */
+.profile-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+.profile-row select {
+  flex: 1 1 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 16px; /* ≥16px：避免 iOS 聚焦自动放大页面 */
+  font-family: inherit;
+}
+.profile-row select:focus-visible { outline: none; border-color: var(--gold); }
+.profile-row .btn { flex: 1; }
+
 .backup-row { display: flex; gap: 10px; margin-top: 10px; }
 
 .backup-row .btn { flex: 1; }
@@ -359,6 +412,7 @@ textarea:focus-visible, input:focus-visible {
 .import-summary { font-size: 14px; color: var(--text); line-height: 1.6; margin: 10px 0 4px; }
 
 .hint { font-size: 13px; color: var(--text-dim); margin: 8px 0; }
+.import-error { color: var(--danger); }
 
 .hint.gold { color: var(--gold); }
 
@@ -391,6 +445,36 @@ textarea:focus-visible, input:focus-visible {
 }
 
 #progress-text { font-size: 14px; color: var(--text-dim); }
+
+.progress-dim-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.progress-dim-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy);
+  background: color-mix(in srgb, var(--gold) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
+}
+
+.progress-dim-covered {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.progress-dim-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
 
 .progress-track {
   height: 6px;
@@ -448,6 +532,14 @@ textarea:focus-visible, input:focus-visible {
   align-self: flex-end;
   background: var(--navy);
   border-top-right-radius: 4px;
+}
+
+.bubble-score {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold);
 }
 
 /* 「面试官正在输入…」打字指示 */

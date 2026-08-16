@@ -14,6 +14,11 @@
 
 const TYPES = new Set(['开场', '行为', '技术', '项目深挖', '压力', '反问']);
 
+// 题文长度上限（trim 后字符数，契约 §16）：真实面试题一两句话，500 字已极宽裕。
+// 不设上限的话，一份带超大字符串的题集分享文件能打爆 localStorage 配额，而
+// storage.write 的配额重试会牺牲最旧 session——导入垃圾不得毁练习记录（V2.4 复核修复）。
+export const MAX_QUESTION_TEXT = 500;
+
 // 疑问虚词＋引导客套词（长词优先排列；「类」词表可增，但只减不改语义）
 const QUESTION_STOPWORDS = [
   '可不可以', '为什么', '有没有', '是不是', '能不能', '怎么样',
@@ -40,6 +45,7 @@ function extractRefPoints(text) {
 export function makeCustomQuestion({ text, type = '行为', id } = {}) {
   const trimmed = typeof text === 'string' ? text.trim() : '';
   if (trimmed.length < 5) return null; // 拒收无意义题
+  if (trimmed.length > MAX_QUESTION_TEXT) return null; // 拒收超长题（上限口径见 MAX_QUESTION_TEXT 注释）
 
   return {
     id: typeof id === 'string' && id ? id : 'custom',

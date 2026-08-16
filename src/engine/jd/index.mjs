@@ -83,6 +83,21 @@ function pickResponsibilities(lines) {
     .slice(0, 8);
 }
 
+// 开考闸：低置信形状（空技能/空关键词/空职责）不能按 JD 出题打分。
+// parseJD 仍 garbage-in-no-crash；本函数只回答「能不能开考」。坏输入一律 false。
+export function isJdScorable(jd) {
+  if (!jd || typeof jd !== 'object' || Array.isArray(jd)) return false;
+  const named = (xs) => Array.isArray(xs)
+    ? xs.filter((x) => {
+      if (typeof x === 'string') return x.trim().length > 0;
+      return x && typeof x.name === 'string' && x.name.trim().length > 0;
+    })
+    : [];
+  return named(jd.skills).length > 0
+    || named(jd.keywords).length > 0
+    || named(jd.responsibilities).length > 0;
+}
+
 export function parseJD(text) {
   if (typeof text !== 'string' || !text.trim()) return emptyProfile();
 

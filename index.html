@@ -32,11 +32,24 @@
       <div id="sample-options" class="pill-group" role="group" aria-label="一键填充示例数据"></div>
 
       <!-- 弱项重练入口（V2.1）：有历史低分题才显示，数据来自 src/drill collectMistakes -->
-      <div id="drill-card" class="card drill-card" hidden>
-        <h3 class="card-title">弱项重练</h3>
-        <p id="drill-lead" class="drill-lead"></p>
+      <div id="drill-card" class="card drill-card" hidden role="region" aria-labelledby="drill-title">
+        <h3 id="drill-title" class="card-title">弱项重练</h3>
+        <p id="drill-lead" class="drill-lead" aria-live="polite"></p>
         <p id="drill-preview" class="hint"></p>
         <button id="btn-drill-start" class="btn gold block">开练（最多 5 题）</button>
+        <p id="drill-error" class="hint import-error" hidden role="alert"></p>
+      </div>
+
+      <!-- 公考结构化面试入口（V2.6 卡26）：题库来自公考陪练资产仓，五维均衡抽题，无需 JD -->
+      <div id="gongkao-card" class="card gongkao-card">
+        <h3 class="card-title">公考结构化面试</h3>
+        <p id="gongkao-lead" class="gongkao-lead">百题题库 · 五维均衡抽题 · 无需 JD</p>
+        <ul id="gongkao-dim-chips" class="gongkao-dims" aria-label="公考五维"></ul>
+        <p class="hint">面试官风格沿用下方选择。选好题数直接开练，不吃岗位 JD。</p>
+        <div class="field-label">本题场题数</div>
+        <div id="gongkao-rounds-options" class="pill-group" role="radiogroup" aria-label="公考场题数"></div>
+        <button id="btn-gongkao-start" class="btn primary block">开练公考场（5 题）</button>
+        <p id="gongkao-error" class="hint import-error" hidden role="alert"></p>
       </div>
 
       <!-- 我的题集（V2.3）：手录真实面试题，开场可勾选混入（契约 §16） -->
@@ -49,7 +62,24 @@
         <div class="field-label">题目类型</div>
         <div id="custom-type-options" class="pill-group" role="radiogroup" aria-label="自定义题类型"></div>
         <button id="btn-custom-add" class="btn gold block">加入题集</button>
+        <p id="custom-add-error" class="hint import-error" hidden role="alert"></p>
+        <!-- 题集分享（V2.4 #7）：只装题文与类型的轻信封，与台账页「数据备份」是两种文件 -->
+        <div class="backup-row">
+          <button id="btn-custom-export" class="btn ghost">导出分享</button>
+          <button id="btn-custom-import" class="btn ghost">导入题集</button>
+        </div>
+        <p id="custom-import-error" class="hint import-error" hidden role="alert"></p>
+        <input id="custom-file" type="file" accept=".json,application/json" hidden>
       </details>
+
+      <!-- 简历档案切换（V2.4 #6）：存当前 JD+简历为档案，下拉切换一键回填（契约 §9 profiles 面，上限 10 份） -->
+      <label class="field-label" for="profile-select">简历档案（同时投多个岗位？存几份 JD+简历，随时切换）</label>
+      <div class="profile-row">
+        <select id="profile-select" aria-label="切换简历档案" hidden></select>
+        <button id="btn-profile-save" class="btn ghost">存为档案</button>
+        <button id="btn-profile-delete" class="btn ghost" hidden>删除档案</button>
+      </div>
+      <p id="profile-error" class="hint import-error" hidden role="alert"></p>
 
       <label class="field-label" for="jd-input">目标岗位 JD</label>
       <textarea id="jd-input" rows="6"
@@ -87,11 +117,20 @@
       </label>
 
       <button id="btn-start" class="btn primary block">开始面试</button>
+      <p id="start-error" class="hint import-error" hidden role="alert"></p>
     </section>
 
     <!-- ② 面试页 -->
     <section id="view-interview" class="view" hidden>
       <div id="interview-empty" class="empty-state">
+        <!-- 中断恢复卡（V2.5 接线，契约 §5/§13）：检测到有效快照才现身，文案出自 describeInterviewSnapshot -->
+        <div id="restore-card" class="card" hidden role="region" aria-labelledby="restore-title">
+          <h3 id="restore-title" class="card-title">继续上次面试</h3>
+          <p id="restore-desc" class="hint" aria-live="polite"></p>
+          <button id="btn-restore-continue" class="btn primary block">继续上次面试</button>
+          <button id="btn-restore-discard" class="btn ghost block">重新开始（清除上次进度）</button>
+        <p id="restore-error" class="hint import-error" hidden role="alert"></p>
+        </div>
         <p>还没有进行中的面试。</p>
         <p>去「准备」页贴上 JD，和面试官打一场吧。</p>
       </div>
@@ -100,6 +139,12 @@
           <span id="progress-text">第 1/共 8 题</span>
           <button id="btn-early-finish" class="btn ghost small">提前交卷</button>
         </div>
+        <div id="progress-dim-row" class="progress-dim-row" hidden>
+          <span id="progress-dim-chip" class="progress-dim-chip">本题·综合分析</span>
+          <span id="progress-dim-covered" class="progress-dim-covered"></span>
+        </div>
+        <p id="progress-dim-note" class="hint progress-dim-note" hidden></p>
+        <p id="early-finish-error" class="hint import-error" hidden role="alert"></p>
         <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
         <div id="chat-log" class="chat-log" aria-live="polite"></div>
         <p id="voice-hint" class="hint voice-hint" hidden>聆听中，说完后再点麦克风结束；识别出的文字可修改后再提交。</p>
@@ -116,6 +161,8 @@
           </button>
           <button id="btn-submit" class="btn primary">提交回答</button>
         </div>
+        <p id="voice-error" class="hint import-error" hidden role="alert"></p>
+        <p id="submit-error" class="hint import-error" hidden role="alert"></p>
       </div>
     </section>
 
@@ -133,8 +180,10 @@
           <!-- 战绩分享卡（V2.3）：canvas 不支持时保持 hidden（app.js 探测后放开） -->
           <button id="btn-share-card" class="btn gold" hidden>生成分享图</button>
         </div>
+        <p id="share-error" class="hint import-error" hidden role="alert"></p>
         <p id="export-locked-hint" class="hint" hidden>解锁后导出完整版</p>
         <button id="coach-link-row" class="coach-link-row" hidden>针对你的弱项，看这几条锦囊 →</button>
+        <p id="unlock-error" class="hint import-error" hidden role="alert"></p>
         <div id="report-content"></div>
       </div>
       <p id="disclosure-bar" class="disclosure-bar"></p>
@@ -162,6 +211,7 @@
           <button id="btn-backup-export" class="btn gold">导出备份</button>
           <button id="btn-backup-import" class="btn ghost">导入备份</button>
         </div>
+        <p id="backup-import-error" class="hint import-error" hidden role="alert"></p>
         <input id="backup-file" type="file" accept=".json,application/json" hidden>
       </div>
       <div class="card">
@@ -175,6 +225,7 @@
       <div class="card">
         <h3 class="card-title">练习历史</h3>
         <ul id="history-list" class="history-list"></ul>
+        <p id="ledger-error" class="hint import-error" hidden role="alert"></p>
       </div>
       <div class="ledger-footer">
         <button id="btn-onboarding-open" class="btn ghost">新手引导</button>
@@ -318,7 +369,7 @@
     <button class="tab" data-view="coach">锦囊</button>
   </nav>
 
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast" hidden role="alert"></div>
 
   <script type="module" src="/app/app.js"></script>
 </body>

@@ -7,6 +7,7 @@
 // 单真源纪律：报告只渲染 title＋一句摘要＋id 锚点，body 全文由前端锦囊页承载，此处绝不复制。
 
 import { recommendTips } from '../coach/index.mjs';
+import { GONGKAO_DIMS } from '../gongkao/index.mjs';
 
 const DISCLOSURE = 'AI 模拟评分仅供练习参考，不预测真实面试结果';
 
@@ -501,7 +502,28 @@ export function buildReport({ result, jd, resume, match }) {
   };
   const total = ss.total ?? 0;
   const totalBand = band(total);
-  const title = `《过面》模拟面试报告 · ${jd?.title ?? '目标岗位'}（${jd?.level ?? '未知'} · ${jd?.domain ?? '通用'}）`;
+  const isAbandoned = result?.abandoned === true;
+  const answeredCount = Number.isFinite(result?.answeredCount) ? result.answeredCount : scores.length;
+  const plannedCount = Number.isFinite(result?.totalCount) ? result.totalCount : questions.length;
+  // ③⑤只诊断已评分题：提前交卷时 plan.questions 仍是全计划，按 scores 切片
+  // 才不会给未答题造 0 分「标杆答案」假诊断。
+  const diagnosedQuestions = questions.slice(0, Math.max(0, Math.min(questions.length, scores.length)));
+  const gkDims = result?.gongkaoDims && typeof result.gongkaoDims === 'object' && !Array.isArray(result.gongkaoDims)
+    ? result.gongkaoDims
+    : null;
+  const gkLines = gkDims
+    ? GONGKAO_DIMS.map((d) => {
+        const score = gkDims[d];
+        if (!Number.isFinite(score)) return null;
+        return `- ${d}：${Math.round(score)} 分（${band(score)}档）。`;
+      }).filter(Boolean)
+    : [];
+  const isGongkao = result?.plan?.mode === 'gongkao' || gkLines.length > 0;
+  const title = isGongkao
+    ? (isAbandoned
+      ? `《过面》模拟面试报告 · 公考结构化（提前交卷 · 已答 ${answeredCount}/共 ${plannedCount}）`
+      : `《过面》模拟面试报告 · 公考结构化（${questions.length} 题）`)
+    : `《过面》模拟面试报告 · ${jd?.title ?? '目标岗位'}（${jd?.level ?? '未知'} · ${jd?.domain ?? '通用'}）`;
   const weakestLabels = (ss.weakest ?? []).map((d) => DIM_LABELS[d] ?? d).join('、') || '暂无';
   const strongestLabels = (ss.strongest ?? []).map((d) => DIM_LABELS[d] ?? d).join('、') || '暂无';
   const durationMin =
@@ -516,7 +538,9 @@ export function buildReport({ result, jd, resume, match }) {
   sections.push({
     heading: '① 总评与总分',
     body: [
-      `本场共 ${questions.length} 道题${durationMin != null ? `，用时约 ${durationMin} 分钟` : ''}，总分 ${total}/100（${totalBand}档），其中 ${above70} 道题达到 70 分以上。`,
+      isAbandoned
+        ? `本场计划 ${plannedCount} 道题，提前交卷已答 ${answeredCount} 道${durationMin != null ? `，用时约 ${durationMin} 分钟` : ''}，总分 ${total}/100（${totalBand}档），其中 ${above70} 道题达到 70 分以上。`
+        : `本场共 ${questions.length} 道题${durationMin != null ? `，用时约 ${durationMin} 分钟` : ''}，总分 ${total}/100（${totalBand}档），其中 ${above70} 道题达到 70 分以上。`,
       pick(VERDICT[totalBand], `verdict:${total}:${questions.length}`),
       `最强项：${strongestLabels}；最需补强：${weakestLabels}。五维明细见雷达诊断，逐题的具体问题与改法见逐题诊断。`,
       `评分口径说明：本报告为本地规则评分（确定性启发式），衡量的是回答的结构、针对性、证据密度与表达质量，不等同于真实面试官的综合判断。`,
@@ -562,36 +586,47 @@ export function buildReport({ result, jd, resume, match }) {
       '五个维度按契约权重加权（结构化 25% / 相关性 25% / 深度 20% / 量化 15% / 清晰度 15%）：',
       ...DIMS.map((d) => dimLine(ss.radar ?? {}, d)),
       `读法提示：优先修最低分维度——同样一小时练习，花在「${weakestLabels}」上的分数回报最高。`,
+      ...(gkLines.length > 0
+        ? [
+            '公考结构化五维（独立评分档：按本题维度汇总既有题分，与上方表达五维不是同一套轴；本场未考到的维度不列出、不造 0 分假象）：',
+            ...gkLines,
+          ]
+        : []),
       ...paceLines,
     ].join('\n'),
     locked: true,
   });
 
   // ③ 逐题诊断（第一题免费，其余 locked）
-  questions.forEach((question, i) => {
+  diagnosedQuestions.forEach((question, i) => {
     sections.push(buildQuestionSection(question, answers[i], scores[i], i));
   });
 
   // ④ JD 匹配度与缺口（locked）
-  const matchBody = match
+  const matchBody = isGongkao
     ? [
-        `简历与该 JD 的匹配度：${match.matchScore ?? 0}/100。`,
-        `已匹配的关键能力：${(match.matched ?? []).join('、') || '暂未识别'}。`,
-        `明显缺口：${(match.missing ?? []).join('、') || '暂未识别'}。`,
-        (match.missing ?? []).length > 0
-          ? `缺口应对：对每个缺口技能准备一段「迁移性解释」——用最接近的已有经验说明你能多快补上，而不是回避。面试中被问到缺口时，先承认、再给学习路径、最后给相近佐证。`
-          : '当前未发现显著技能缺口，重点转向经历深度的表达。',
-        `岗位关键词全景：${(jd?.keywords ?? []).join('、') || '无'}。请核对本场回答对这些词的覆盖情况（见各题「主要问题」）。`,
+        '本场为公考结构化面试，出题与评分均不消费岗位 JD——没有「简历对照岗位」的缺口清单可报。',
+        '公考五维明细见②节专属雷达。下一场若要练岗位面试，请走准备页粘贴 JD 与简历的常规入口。',
       ].join('\n')
-    : [
-        '本场未提供简历匹配数据（未传入 resume/match），无法计算个人化匹配度。',
-        `可以先对照岗位关键词自查：${(jd?.keywords ?? []).join('、') || '无'}。逐词问自己「我有没有一段能证明它的经历」，没有的词就是你的准备缺口。`,
-        '建议下一场模拟前粘贴简历，报告将给出逐技能的匹配与缺口清单。',
-      ].join('\n');
+    : match
+      ? [
+          `简历与该 JD 的匹配度：${match.matchScore ?? 0}/100。`,
+          `已匹配的关键能力：${(match.matched ?? []).join('、') || '暂未识别'}。`,
+          `明显缺口：${(match.missing ?? []).join('、') || '暂未识别'}。`,
+          (match.missing ?? []).length > 0
+            ? `缺口应对：对每个缺口技能准备一段「迁移性解释」——用最接近的已有经验说明你能多快补上，而不是回避。面试中被问到缺口时，先承认、再给学习路径、最后给相近佐证。`
+            : '当前未发现显著技能缺口，重点转向经历深度的表达。',
+          `岗位关键词全景：${(jd?.keywords ?? []).join('、') || '无'}。请核对本场回答对这些词的覆盖情况（见各题「主要问题」）。`,
+        ].join('\n')
+      : [
+          '本场未提供简历匹配数据（未传入 resume/match），无法计算个人化匹配度。',
+          `可以先对照岗位关键词自查：${(jd?.keywords ?? []).join('、') || '无'}。逐词问自己「我有没有一段能证明它的经历」，没有的词就是你的准备缺口。`,
+          '建议下一场模拟前粘贴简历，报告将给出逐技能的匹配与缺口清单。',
+        ].join('\n');
   sections.push({ heading: '④ JD 匹配度与缺口', body: matchBody, locked: true });
 
   // ⑤ 追问预演（locked）——V1.5 个性化：对准该题实际最弱维度＋未覆盖考点补位
-  const followupLines = questions.map((q, i) => {
+  const followupLines = diagnosedQuestions.map((q, i) => {
     const score = scores[i];
     const dims = score?.dims ?? { structure: 0, relevance: 0, quantification: 0, depth: 0, clarity: 0 };
     const ordered = [...DIMS].sort((a, b) => dims[a] - dims[b] || DIMS.indexOf(a) - DIMS.indexOf(b));
@@ -700,8 +735,11 @@ export function buildReport({ result, jd, resume, match }) {
 
   // ---- shareText：200-400 字，结尾必带披露句 ----
   const tail = `${DISCLOSURE}。`;
+  const roundPhrase = isAbandoned
+    ? `模拟面试提前交卷：已答 ${answeredCount}/${plannedCount} 题`
+    : `模拟面试完成：共 ${questions.length} 题`;
   let body =
-    `【过面 · 模拟面试战报】${jd?.title ?? '目标岗位'}模拟面试完成：共 ${questions.length} 题，总分 ${total}/100（${totalBand}档）。` +
+    `【过面 · 模拟面试战报】${isGongkao ? '公考结构化' : (jd?.title ?? '目标岗位')}${roundPhrase}，总分 ${total}/100（${totalBand}档）。` +
     `${SHARE_OPENERS[totalBand]}` +
     `本场最强项是${strongestLabels}，最需要补强的是${weakestLabels}，其中 ${above70} 道题达到 70 分以上。`;
   const pads = [

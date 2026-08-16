@@ -36,7 +36,15 @@ export class StateError extends Error {
   }
 }
 
-export function createSession({ plan, scorer, llm = null, persona = null, now = Date.now } = {}) {
+// 快照版本号（契约 §5 V2.5）：形状变更时递增，restoreSession 只认当前版本
+const SNAPSHOT_V = 1;
+
+// 快照数据全走 JSON 可序列化平铺形状，structuredClone 保证快照与会话内部零别名
+function deepClone(x) {
+  return structuredClone(x);
+}
+
+export function createSession({ plan, scorer, llm = null, persona = null, now = Date.now, resume = null } = {}) {
   if (!plan || !Array.isArray(plan.questions)) {
     throw new TypeError('createSession 需要含 questions 数组的 plan');
   }
@@ -52,7 +60,16 @@ export function createSession({ plan, scorer, llm = null, persona = null, now = 
   let questionStartedAt = null; // 当前题问出时刻（V2.1 计时起点）
   const answers = [];
   const scores = [];
-  const startedAt = now();
+  let startedAt = now();
+
+  // 恢复通路（V2.5）：resume 只能由 restoreSession 传入（已校验＋已深拷贝）。
+  // cursor 落在首个未定稿题上——挂题在快照侧已被丢弃，恢复后自然重问。
+  if (resume) {
+    answers.push(...resume.answers);
+    scores.push(...resume.scores);
+    cursor = answers.length;
+    startedAt = resume.startedAt;
+  }
 
   const fail = (action) => {
     throw new StateError(`状态 ${state} 下不允许调用 ${action}`);
@@ -186,6 +203,22 @@ export function createSession({ plan, scorer, llm = null, persona = null, now = 
       };
     },
 
+    // 中断恢复快照（V2.5，契约 §5）：finished 之外任意状态可调。
+    // 只收已定稿的题；挂在 awaiting_answer / awaiting_followup 的未定稿题整题丢弃
+    // （与 abandon 同一「半程不收录」口径——追问重评可能取更高分，半程收录会低估该题），
+    // 恢复后该题重问。深拷贝返回：快照与会话内部状态零别名。
+    snapshot() {
+      if (state === 'finished') fail('snapshot');
+      return deepClone({
+        v: SNAPSHOT_V,
+        plan,
+        answers,
+        scores,
+        startedAt,
+        savedAt: now(),
+      });
+    },
+
     // 提前交卷（V1.2 P2-5 收口）：finished 之外任意状态可调。
     // 挂在 awaiting_answer 的题（未作答）与挂在 awaiting_followup 的题（首答已评但
     // 未定稿——追问重评可能取更高分，半程收录会低估该题）都整题丢弃；
@@ -211,4 +244,23 @@ export function createSession({ plan, scorer, llm = null, persona = null, now = 
       };
     },
   };
+}
+
+// 从快照恢复会话（契约 §5 V2.5）：坏快照一律 TypeError 拒收，绝不静默造半坏会话。
+// 校验通过后整体深拷贝再喂 createSession——调用方手里的快照对象与新会话零别名。
+export function restoreSession({ snapshot, scorer, llm = null, persona = null, now = Date.now } = {}) {
+  const bad = (why) => {
+    throw new TypeError(`restoreSession 拒收坏快照：${why}`);
+  };
+  const s = snapshot;
+  if (!s || typeof s !== 'object') bad('快照不是对象');
+  if (s.v !== SNAPSHOT_V) bad(`未知快照版本 ${s.v}（当前只认 ${SNAPSHOT_V}）`);
+  if (!s.plan || !Array.isArray(s.plan.questions)) bad('plan.questions 不是数组');
+  if (!Array.isArray(s.answers) || !Array.isArray(s.scores)) bad('answers/scores 必须是数组');
+  if (s.answers.length !== s.scores.length) bad(`answers（${s.answers.length}）与 scores（${s.scores.length}）长度不齐`);
+  if (s.answers.length > s.plan.questions.length) bad(`已答题数 ${s.answers.length} 超过 plan 题数 ${s.plan.questions.length}`);
+  if (!Number.isFinite(s.startedAt)) bad('startedAt 不是有限数字');
+
+  const safe = deepClone({ plan: s.plan, answers: s.answers, scores: s.scores, startedAt: s.startedAt });
+  return createSession({ plan: safe.plan, scorer, llm, persona, now, resume: safe });
 }
